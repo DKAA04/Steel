@@ -1,0 +1,21 @@
+# Orchestration
+langgraph
+langchain
+
+# Voice
+openai-whisper
+
+# Vision
+ultralytics
+
+# LLM client
+ollama
+
+# API
+fastapi
+uvicorn[standard]
+
+# Dev
+pytest
+ruff
+mypy

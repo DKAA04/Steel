@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Models / data
+*.pt
+*.onnx
+*.bin
+*.gguf
+data/
+models/
+
+# Flutter
+mobile/build/
+mobile/.dart_tool/
+mobile/.flutter-plugins*
+
+# OS / IDE
+.DS_Store
+.idea/
+.vscode/
+*.log
+
+# gstack: use global install at ~/.claude/skills/gstack/
+.claude/
