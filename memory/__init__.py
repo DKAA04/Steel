@@ -1,0 +1,1 @@
+"""Explicit, local note storage."""
