@@ -1,21 +1,2 @@
-# Orchestration
-langgraph
-langchain
-
-# Voice
-openai-whisper
-
-# Vision
-ultralytics
-
-# LLM client
-ollama
-
-# API
-fastapi
-uvicorn[standard]
-
-# Dev
-pytest
-ruff
-mypy
+# The current offline foundation uses only Python 3.11+ standard-library modules.
+# Future model, voice, vision and API dependencies are intentionally not installed.

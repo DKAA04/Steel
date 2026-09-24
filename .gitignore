@@ -30,3 +30,10 @@ mobile/.flutter-plugins*
 
 # gstack: use global install at ~/.claude/skills/gstack/
 .claude/
+
+# Private local memory / recordings
+*.sqlite
+*.sqlite3
+*.db
+*.sqlite3-*
+recordings/
