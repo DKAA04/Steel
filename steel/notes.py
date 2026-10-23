@@ -64,6 +64,13 @@ class MemoryStore:
         ).fetchall()
         return [{"id": note_id, "text": text} for note_id, text in rows]
 
+    def entries(self) -> list[tuple[str, str, float]]:
+        """All unexpired notes as (id, text, expiry unix time), oldest first."""
+        self.purge_expired()
+        return list(
+            self._db.execute("SELECT id, text, expires FROM notes ORDER BY rowid")
+        )
+
     def forget(self, note_id: str) -> bool:
         """Delete one explicitly identified note; return whether it existed."""
         with self._db:

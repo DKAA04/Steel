@@ -15,6 +15,7 @@ import os
 import sqlite3
 import stat
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
@@ -27,12 +28,15 @@ from steel.cli import main
 from steel.facts import SteelFactStore, fact_id
 from steel.home import harden
 from steel.memory import SteelMemory
+from steel.notes import MemoryStore
 from steel.pin import PinError, check_openjarvis_pin
 
 # Invented facts the fake extractor "finds" in a user message.
 FAKE_FACTS = {
     "teal": ["User's favourite colour is teal"],
     "Rotterdam": ["User lives in Rotterdam"],
+    "Mara": ["Mara is visiting next weekend"],
+    "Lucía": ["Lucía viene mañana a cenar"],
 }
 EXTRACTOR_MARKER = "You extract durable"  # start of OpenJarvis' extractor prompt
 
@@ -212,6 +216,69 @@ class ForgetTest(HomeTestCase):
             self.assertFalse(memory.forget(bad))
 
 
+class TimeBoundRoutingTest(HomeTestCase):
+    def test_time_bound_fact_goes_to_notes_with_a_7_day_expiry(self) -> None:
+        session = self.session()
+        session.ask("My sister Mara is visiting next weekend.")
+        session.ask("I live in Rotterdam.")
+        session.close()
+        memory = SteelMemory(self.home)
+        # The durable file only holds the durable fact.
+        self.assertEqual(
+            [f.text for f in memory.facts.list()], ["User lives in Rotterdam"]
+        )
+        notes = [e for e in memory.entries() if e.id.startswith("n-")]
+        self.assertEqual([n.text for n in notes], ["Mara is visiting next weekend"])
+        self.assertIn("expires", notes[0].store)
+        with memory.notes_store() as store:
+            [(_id, _text, expires)] = store.entries()
+        self.assertAlmostEqual(expires - time.time(), 7 * 86400, delta=60)
+
+    def test_spanish_time_bound_fact_is_routed_too(self) -> None:
+        session = self.session()
+        session.ask("Lucía viene mañana a cenar.")
+        session.close()
+        memory = SteelMemory(self.home)
+        self.assertEqual(memory.facts.count(), 0)
+        self.assertEqual(
+            [e.text for e in memory.entries()], ["Lucía viene mañana a cenar"]
+        )
+
+    def test_notes_reach_the_prompt_and_repeats_are_not_duplicated(self) -> None:
+        first = self.session()
+        first.ask("My sister Mara is visiting next weekend.")
+        first.close()
+        engine = FakeEngine()
+        second = self.session(engine)
+        second.ask("My sister Mara is visiting next weekend.")  # same fact again
+        second.ask("When is Mara coming?")
+        second.close()
+        self.assertIn("Mara is visiting next weekend", engine.chat_prompts[-1])
+        self.assertEqual(len(SteelMemory(self.home).entries()), 1)
+
+    def test_forgotten_note_is_not_re_extracted(self) -> None:
+        session = self.session()
+        session.ask("My sister Mara is visiting next weekend.")
+        session.close()
+        memory = SteelMemory(self.home)
+        [entry] = memory.entries()
+        self.assertTrue(memory.forget(entry.id))
+        again = self.session()
+        again.ask("My sister Mara is visiting next weekend.")
+        again.close()
+        self.assertEqual(SteelMemory(self.home).entries(), [])
+
+    def test_expired_note_disappears_from_list(self) -> None:
+        memory = SteelMemory(self.home)
+        # A note written 8 days ago with the 7-day TTL has already expired.
+        eight_days_ago = lambda: time.time() - 8 * 86400
+        with MemoryStore(
+            memory.notes_path, allow_persistence=True, clock=eight_days_ago
+        ) as notes:
+            notes.remember("Mara is visiting next weekend", ttl_hours=168)
+        self.assertEqual(memory.entries(), [])
+
+
 class ForgetRelatedTest(HomeTestCase):
     FACTS: ClassVar[list[str]] = [
         "User's favorite tea is genmaicha",
@@ -335,6 +402,7 @@ KNOWN_CHANGED_FILES = {
     "audit.db": "OpenJarvis security audit: pattern names, no text (wiped)",
     "audit.db-wal": "SQLite write-ahead log of audit.db (wiped)",
     "audit.db-shm": "SQLite shared-memory index of audit.db (wiped)",
+    "steel_notes.sqlite3": "expiring notes for time-bound facts (wiped)",
 }
 
 
@@ -345,12 +413,14 @@ class FileAuditTest(HomeTestCase):
         session.ask("My favourite colour is teal.")
         # Contains an invented e-mail address, to trigger the PII guardrail.
         session.ask("Write to synthetic.person@example.invalid about Rotterdam.")
+        session.ask("My sister Mara is visiting next weekend.")  # time-bound
         session.close()
         after = _snapshot(self.home)
         changed = {name for name, digest in after.items() if before.get(name) != digest}
         unknown = changed - set(KNOWN_CHANGED_FILES)
         self.assertEqual(unknown, set(), f"unexplained files: {sorted(unknown)}")
         self.assertIn("memory_facts.jsonl", changed)
+        self.assertIn("steel_notes.sqlite3", changed)
 
         # The audit log must not contain the conversation text itself.
         # The guardrail did log the e-mail finding, but only by pattern name.

@@ -94,7 +94,7 @@ class StoreGuardTest(unittest.TestCase):
         self.assertTrue(self.store.add("User has a peanut allergy."))
         result = self.store.add_checked("User has peanut allergy")
         self.assertEqual(result.outcome, "duplicate")
-        self.assertTrue(result.existing_id.startswith("f-"))
+        self.assertTrue(result.entry_id.startswith("f-"))
         self.assertEqual(self.store.count(), 1)
 
     def test_distinct_and_richer_facts_are_stored(self) -> None:

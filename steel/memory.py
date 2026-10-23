@@ -13,16 +13,15 @@ when other OpenJarvis commands (``jarvis ask/serve/agent``...) run, so
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from steel.facts import FACT_PREFIX, SteelFactStore, fact_id
+from steel.facts import FACT_PREFIX, NOTE_PREFIX, SteelFactStore, fact_id
 from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, USER_MD
 from steel.memory_files import MemoryFile
 from steel.notes import MemoryStore
 from steel.similarity import is_related
-
-NOTE_PREFIX = "n-"
 
 # OpenJarvis SQLite files that can contain conversation text (pinned commit).
 # name -> what text it can hold.
@@ -35,6 +34,11 @@ OPENJARVIS_CONTENT_DBS = {
 }
 # SQLite side files that may hold recent pages of a database.
 _SQLITE_SIDE_FILES = ("", "-wal", "-shm", "-journal")
+
+
+def _when(unix_time: float) -> str:
+    """Local date and time, minute precision, for ``steel memory list``."""
+    return time.strftime("%Y-%m-%d %H:%M", time.localtime(unix_time))
 
 
 @dataclass(frozen=True)
@@ -62,10 +66,12 @@ class SteelMemory:
 
     def __init__(self, home: Path, *, max_facts: int = 1000) -> None:
         self.home = home
-        self.facts = SteelFactStore(home / FACTS_FILE, max_facts=max_facts)
+        self.notes_path = home / NOTES_FILE
+        self.facts = SteelFactStore(
+            home / FACTS_FILE, max_facts=max_facts, notes_path=self.notes_path
+        )
         self.memory_md = MemoryFile(home / MEMORY_MD, "m-", "# Agent Memory\n\n")
         self.user_md = MemoryFile(home / USER_MD, "u-", "# User Profile\n\n")
-        self.notes_path = home / NOTES_FILE
 
     # -- notes helper ----------------------------------------------------
 
@@ -94,8 +100,10 @@ class SteelMemory:
             with notes:
                 # recall("") returns all unexpired notes (and purges expired ones).
                 entries += [
-                    Entry(NOTE_PREFIX + n["id"], "notes", n["text"])
-                    for n in notes.recall("")
+                    Entry(
+                        NOTE_PREFIX + note_id, f"note (expires {_when(expires)})", text
+                    )
+                    for note_id, text, expires in notes.entries()
                 ]
         return entries
 

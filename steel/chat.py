@@ -66,6 +66,11 @@ class ChatSession:
             lines = [text for _id, text in md.entries()]
             if lines:
                 parts.append(f"{label}:\n" + "\n".join(lines))
+        # Temporary facts (routed to the expiring notes). Expired ones are
+        # purged on read, so only live notes reach the model.
+        notes = [e.text for e in self.memory.entries() if e.id.startswith("n-")]
+        if notes:
+            parts.append("Temporary notes (they expire):\n" + "\n".join(notes))
         return "\n\n".join(parts)
 
     def ask(self, user_text: str) -> str:

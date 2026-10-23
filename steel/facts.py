@@ -10,6 +10,9 @@ forget one fact at a time, so this subclass adds:
   so the extractor cannot store the very same fact again.
 
 Near-duplicates of an existing fact are skipped (steel/similarity.py).
+Facts containing a short-term time expression ("tomorrow", "este fin de
+semana"; steel/timewords.py) are routed to the expiring notes store with a
+7-day TTL instead of the durable facts file.
 
 The forgotten list only blocks *exact* repeats (same text ignoring case and
 surrounding spaces). A reworded version of a forgotten fact is new text with a
@@ -39,9 +42,14 @@ from openjarvis.memory.store import (
 )
 
 from steel.home import FORGOTTEN_FILE
+from steel.notes import MemoryStore
 from steel.similarity import is_near_duplicate
+from steel.timewords import is_time_bound
 
 FACT_PREFIX = "f-"
+NOTE_PREFIX = "n-"
+# Time-bound facts expire after this many hours (7 days = the notes maximum).
+TIME_BOUND_TTL_HOURS = 168.0
 
 
 def fact_id(text: str) -> str:
@@ -58,12 +66,15 @@ def fact_id(text: str) -> str:
 class AddResult:
     """What happened to a fact offered to the store."""
 
-    outcome: str  # "stored", "blank", "forgotten" or "duplicate"
-    existing_id: str = ""  # for "duplicate": id of the fact it duplicates
+    # "stored" (durable fact), "note" (expiring note), "blank", "forgotten"
+    # or "duplicate".
+    outcome: str
+    # "stored"/"note": id of the new entry. "duplicate": id of the existing one.
+    entry_id: str = ""
 
     @property
     def stored(self) -> bool:
-        return self.outcome == "stored"
+        return self.outcome in ("stored", "note")
 
 
 class SteelFactStore(LocalFactStore):
@@ -75,6 +86,7 @@ class SteelFactStore(LocalFactStore):
         *,
         max_facts: int = 1000,
         forgotten_path: str | Path | None = None,
+        notes_path: str | Path | None = None,
     ) -> None:
         # Let upstream resolve the JSONL path and load existing facts.
         super().__init__(path, max_facts=max_facts)
@@ -84,6 +96,8 @@ class SteelFactStore(LocalFactStore):
             if forgotten_path is not None
             else self._path.with_name(FORGOTTEN_FILE)
         )
+        # Where time-bound facts go. None = no routing (everything is durable).
+        self._notes_path = Path(notes_path) if notes_path is not None else None
 
     # -- forgotten list (hashes only) -------------------------------------
 
@@ -132,8 +146,26 @@ class SteelFactStore(LocalFactStore):
             for fact in self.list():
                 if fact.trusted_for_recall and is_near_duplicate(text, fact.text):
                     return AddResult("duplicate", fact_id(fact.text))
+        # Short-lived facts ("visiting next weekend") go to the expiring notes.
+        # Quarantined facts never do: notes carry no trust marker.
+        if (
+            self._notes_path is not None
+            and (trust or "").strip().lower() in RECALLABLE_TRUST_TIERS
+            and is_time_bound(text)
+        ):
+            return self._add_note(text)
         stored = super().add(text, source=source, trust=trust)
         return AddResult("stored" if stored else "duplicate", fact_id(text))
+
+    def _add_note(self, text: str) -> AddResult:
+        """Store *text* as an expiring note unless a similar note exists."""
+        assert self._notes_path is not None
+        with MemoryStore(self._notes_path, allow_persistence=True) as notes:
+            for note_id, old_text, _expires in notes.entries():
+                if is_near_duplicate(text, old_text):
+                    return AddResult("duplicate", NOTE_PREFIX + note_id)
+            note_id = notes.remember(text, ttl_hours=TIME_BOUND_TTL_HOURS)
+        return AddResult("note", NOTE_PREFIX + note_id)
 
     def mark_forgotten(self, text: str) -> None:
         """Record the hash of *text* (e.g. a forgotten note) without storing it."""
