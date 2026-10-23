@@ -12,7 +12,7 @@ Everything lives under the OpenJarvis home (`~/.openjarvis`, or `$OPENJARVIS_HOM
 | `memory_facts.jsonl.lock` | Nothing (empty lock file) | Yes | Yes |
 | `steel_forgotten.json` | Hashes of facts you forgot, never the text | On `steel forget` | Yes |
 | `MEMORY.md`, `USER.md` | Lines you or other OpenJarvis commands wrote | No (read only) | Reset to header |
-| `steel_notes.sqlite3` | Expiring notes: time-bound facts extracted from your messages, `steel remember --days`, `steel notes` | Yes (time-bound facts) | Yes |
+| `steel_notes.sqlite3` | Expiring notes, each labelled with a source (`user`: `steel remember --days`, `steel notes`; `time_bound`: extracted from your messages; `room`: reserved, nothing writes it) | Yes (time-bound facts) | Yes |
 | `audit.db` | Security findings: pattern names (e.g. "email") and timestamps; boundary-guard alerts keep an **80-character preview** of the text | Yes (pattern names only; tested) | Yes |
 | `traces.db` | Raw queries and model results | No; disabled in config | Yes |
 | `sessions.db` | Full chat messages of cross-channel sessions | No | Yes |

@@ -170,15 +170,18 @@ class SteelFactStore(LocalFactStore):
         return AddResult("stored" if stored else "duplicate", fact_id(text))
 
     def _add_note(
-        self, text: str, ttl_hours: float = TIME_BOUND_TTL_HOURS
+        self,
+        text: str,
+        ttl_hours: float = TIME_BOUND_TTL_HOURS,
+        source: str = "time_bound",
     ) -> AddResult:
         """Store *text* as an expiring note unless a similar note exists."""
         assert self._notes_path is not None
         with MemoryStore(self._notes_path, allow_persistence=True) as notes:
-            for note_id, old_text, _expires in notes.entries():
+            for note_id, old_text, _expires, _source in notes.entries():
                 if is_near_duplicate(text, old_text):
                     return AddResult("duplicate", NOTE_PREFIX + note_id)
-            note_id = notes.remember(text, ttl_hours=ttl_hours)
+            note_id = notes.remember(text, ttl_hours=ttl_hours, source=source)
         return AddResult("note", NOTE_PREFIX + note_id)
 
     def add_note(self, text: str, ttl_hours: float) -> AddResult:
@@ -187,7 +190,8 @@ class SteelFactStore(LocalFactStore):
         if not text:
             return AddResult("blank")
         self.unforget(text)  # the user changed their mind
-        return self._add_note(text, ttl_hours)
+        # The user chose this note, so it is "user", not "time_bound".
+        return self._add_note(text, ttl_hours, source="user")
 
     def unforget(self, text: str) -> bool:
         """Remove the forgotten hash of *text*; True if there was one."""

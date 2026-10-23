@@ -231,8 +231,9 @@ class TimeBoundRoutingTest(HomeTestCase):
         self.assertEqual([n.text for n in notes], ["Mara is visiting next weekend"])
         self.assertIn("expires", notes[0].store)
         with memory.notes_store() as store:
-            [(_id, _text, expires)] = store.entries()
+            [(_id, _text, expires, source)] = store.entries()
         self.assertAlmostEqual(expires - time.time(), 7 * 86400, delta=60)
+        self.assertEqual(source, "time_bound")
 
     def test_spanish_time_bound_fact_is_routed_too(self) -> None:
         session = self.session()
@@ -359,8 +360,9 @@ class RememberTest(HomeTestCase):
         self.assertTrue(entry.id.startswith("n-"))
         self.assertIn("expires", entry.store)
         with SteelMemory(self.home).notes_store() as notes:
-            [(_id, _text, expires)] = notes.entries()
+            [(_id, _text, expires, source)] = notes.entries()
         self.assertAlmostEqual(expires - time.time(), 2 * 86400, delta=60)
+        self.assertEqual(source, "user")
 
     def test_days_must_be_between_0_and_7(self) -> None:
         for bad in ["0", "-1", "7.5", "8"]:

@@ -111,9 +111,11 @@ class SteelMemory:
                 # recall("") returns all unexpired notes (and purges expired ones).
                 entries += [
                     Entry(
-                        NOTE_PREFIX + note_id, f"note (expires {_when(expires)})", text
+                        NOTE_PREFIX + note_id,
+                        f"note, {source} (expires {_when(expires)})",
+                        text,
                     )
-                    for note_id, text, expires in notes.entries()
+                    for note_id, text, expires, source in notes.entries()
                 ]
         return entries
 

@@ -9,6 +9,12 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Self
 
+# Where a note came from. "user": the user stored it (steel remember --days,
+# steel notes). "time_bound": the extractor found a short-lived fact in a chat
+# message. "room": a future sensor observation. Kept apart so that a policy can
+# later grant a tool the room notes without handing it the user's own notes.
+NOTE_SOURCES = ("user", "time_bound", "room")
+
 
 class MemoryStore:
     """Keep notes in RAM by default; callers must explicitly opt into disk storage."""
@@ -34,11 +40,37 @@ class MemoryStore:
         self._db.execute("PRAGMA secure_delete=ON")
         self._db.execute(
             "CREATE TABLE IF NOT EXISTS notes "
-            "(id TEXT PRIMARY KEY, text TEXT NOT NULL, expires REAL NOT NULL)"
+            "(id TEXT PRIMARY KEY, text TEXT NOT NULL, expires REAL NOT NULL, "
+            "source TEXT NOT NULL DEFAULT 'user')"
         )
+        self._migrate()
 
-    def remember(self, text: str, *, ttl_hours: float = 24.0) -> str:
+    def _migrate(self) -> None:
+        """Add the source column to a database created before it existed.
+
+        Every older row was written by the user or by a chat extraction that
+        had no label, so they all become "user" (the SQL default).
+        """
+        columns = [row[1] for row in self._db.execute("PRAGMA table_info(notes)")]
+        if "source" in columns:
+            return
+        try:
+            with self._db:
+                self._db.execute(
+                    "ALTER TABLE notes ADD COLUMN source TEXT NOT NULL DEFAULT 'user'"
+                )
+        except sqlite3.OperationalError:
+            # Another process may have migrated between our check and the ALTER.
+            columns = [row[1] for row in self._db.execute("PRAGMA table_info(notes)")]
+            if "source" not in columns:
+                raise
+
+    def remember(
+        self, text: str, *, ttl_hours: float = 24.0, source: str = "user"
+    ) -> str:
         """Store a note for at most a week. Never log note content."""
+        if source not in NOTE_SOURCES:
+            raise ValueError(f"Note source must be one of {', '.join(NOTE_SOURCES)}.")
         if not text.strip() or len(text) > 2000:
             raise ValueError(
                 "A note must contain 1–2000 characters and cannot be blank."
@@ -50,8 +82,8 @@ class MemoryStore:
         note_id = uuid.uuid4().hex
         with self._db:
             self._db.execute(
-                "INSERT INTO notes VALUES (?, ?, ?)",
-                (note_id, text.strip(), self._clock() + ttl_hours * 3600),
+                "INSERT INTO notes (id, text, expires, source) VALUES (?, ?, ?, ?)",
+                (note_id, text.strip(), self._clock() + ttl_hours * 3600, source),
             )
         return note_id
 
@@ -64,11 +96,13 @@ class MemoryStore:
         ).fetchall()
         return [{"id": note_id, "text": text} for note_id, text in rows]
 
-    def entries(self) -> list[tuple[str, str, float]]:
-        """All unexpired notes as (id, text, expiry unix time), oldest first."""
+    def entries(self) -> list[tuple[str, str, float, str]]:
+        """Unexpired notes as (id, text, expiry unix time, source), oldest first."""
         self.purge_expired()
         return list(
-            self._db.execute("SELECT id, text, expires FROM notes ORDER BY rowid")
+            self._db.execute(
+                "SELECT id, text, expires, source FROM notes ORDER BY rowid"
+            )
         )
 
     def forget(self, note_id: str) -> bool:

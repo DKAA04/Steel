@@ -32,7 +32,7 @@ flowchart LR
 | `steel/facts.py` | `SteelFactStore(LocalFactStore)`: stable id, `forget(id)`, hash-only forgotten list, duplicate guard, routing of time-bound facts to notes |
 | `steel/memory_files.py` | Exact-line ids and removal for `MEMORY.md` / `USER.md` |
 | `steel/memory.py` | `SteelMemory`: list (with expiry), remember, forget (with related), wipe and audit across all stores |
-| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (one read-only accessor added); hold time-bound facts and `remember --days`; future room-observation store |
+| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (one read-only accessor added); hold time-bound facts and `remember --days`; each note has a `source` (`user`, `time_bound`, `room`; nothing writes `room` yet); older databases are migrated to `user` |
 
 ### Relationship to OpenJarvis
 
