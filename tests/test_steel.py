@@ -42,11 +42,13 @@ class FakeEngine:
 
     def __init__(self) -> None:
         self.chat_prompts: list[str] = []
+        self.extractor_inputs: list[str] = []
 
     def generate(self, messages: Any, *, model: str, **_: Any) -> dict[str, Any]:
         system = messages[0].content if messages else ""
         user = messages[-1].content
         if system.startswith(EXTRACTOR_MARKER):
+            self.extractor_inputs.append(user)
             # Extraction call: return the facts keyed by a word in the message.
             found = [
                 f for key, facts in FAKE_FACTS.items() if key in user for f in facts
@@ -54,6 +56,9 @@ class FakeEngine:
             return {"content": json.dumps(found), "usage": {}}
         # Chat call: remember the full system prompt so tests can inspect it.
         self.chat_prompts.append(system)
+        # Like a real model, repeat remembered facts back to the user.
+        if "teal" in system:
+            return {"content": "You like teal. Rotterdam is nice too.", "usage": {}}
         return {"content": "Noted.", "usage": {}}
 
     def health(self) -> bool:
@@ -137,6 +142,30 @@ class SuccessTest(HomeTestCase):
         memory.wipe()
         self.assertEqual(memory.entries(), [])
         self.assertTrue(memory.is_empty(), memory.audit())
+
+
+class UserOnlyExtractionTest(HomeTestCase):
+    def test_assistant_text_never_reaches_the_extractor(self) -> None:
+        engine = FakeEngine()
+        session = self.session(engine)
+        session.ask("My favourite colour is teal.")
+        session.ask("What is my favourite colour?")
+        session.close()
+        self.assertEqual(len(engine.extractor_inputs), 2)
+        for sent in engine.extractor_inputs:
+            self.assertNotIn("Assistant:", sent)
+            self.assertNotIn("Noted.", sent)
+            self.assertNotIn("Rotterdam is nice", sent)
+
+    def test_a_question_adds_no_facts(self) -> None:
+        # The second reply says "You like teal. Rotterdam is nice too." If the
+        # reply reached the extractor, the fake would invent a Rotterdam fact.
+        session = self.session()
+        session.ask("My favourite colour is teal.")
+        session.ask("What is my favourite colour?")
+        session.close()
+        texts = [e.text for e in SteelMemory(self.home).entries()]
+        self.assertEqual(texts, ["User's favourite colour is teal"])
 
 
 class ForgetTest(HomeTestCase):

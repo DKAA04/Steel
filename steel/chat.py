@@ -87,8 +87,11 @@ class ChatSession:
         # Remember the turn in RAM for the rest of this session only.
         self.history.append(Message(role=Role.USER, content=user_text))
         self.history.append(Message(role=Role.ASSISTANT, content=reply))
-        # Hand the exchange to the MemoryService (non-blocking).
-        publish_completed_exchange(self.bus, user_text, reply, source="steel")
+        # Hand the exchange to the MemoryService (non-blocking). The assistant
+        # text is deliberately EMPTY: a 2B model turns its own replies into
+        # "facts about the user" (see docs/MEMORY_QUALITY.md), so only what the
+        # user typed may reach the extractor.
+        publish_completed_exchange(self.bus, user_text, "", source="steel")
         return reply
 
     def close(self, timeout: float = EXTRACTION_DRAIN_SECONDS) -> None:
