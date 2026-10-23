@@ -10,6 +10,8 @@ The conversation itself is kept only in RAM and is never written to disk.
 
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -24,8 +26,30 @@ from steel.memory import SteelMemory
 
 # Keep at most this many past messages in the prompt (RAM only).
 MAX_HISTORY_MESSAGES = 20
-# How long to wait on exit for pending fact extraction (slow on CPU).
-EXTRACTION_DRAIN_SECONDS = 180.0
+# How long to wait on exit for pending fact extraction (slow on CPU). Override
+# with the environment variable below; 0 means do not wait at all.
+EXTRACTION_DRAIN_SECONDS = 30.0
+EXTRACT_WAIT_ENV = "STEEL_EXTRACT_WAIT_SECONDS"
+# Name OpenJarvis gives the extraction thread (checked after a timed-out stop).
+_MEMORY_THREAD_NAME = "memory-service"
+
+
+def extraction_wait_seconds() -> float:
+    """Seconds to wait at exit, from $STEEL_EXTRACT_WAIT_SECONDS or the default.
+
+    A value that is not a finite number >= 0 is ignored: a typo must not make
+    STEEL hang forever or crash while the user is trying to leave.
+    """
+    raw = os.environ.get(EXTRACT_WAIT_ENV, "").strip()
+    try:
+        value = float(raw)
+    except ValueError:
+        return EXTRACTION_DRAIN_SECONDS
+    # "nan" and "inf" parse as floats; neither is a usable wait.
+    if not 0 <= value < float("inf"):
+        return EXTRACTION_DRAIN_SECONDS
+    return value
+
 
 BASE_PROMPT = (
     "You are STEEL, a local personal assistant. You have no tools: you cannot "
@@ -99,10 +123,23 @@ class ChatSession:
         publish_completed_exchange(self.bus, user_text, "", source="steel")
         return reply
 
-    def close(self, timeout: float = EXTRACTION_DRAIN_SECONDS) -> None:
-        """Stop the memory worker after it finishes queued extractions."""
-        if self.service is not None:
-            self.service.stop(timeout=timeout)
+    def close(self, timeout: float | None = None) -> bool:
+        """Stop the memory worker after it finishes queued extractions.
+
+        Waits at most *timeout* seconds (default: extraction_wait_seconds()).
+        Returns False if extraction was still running when the wait ended; the
+        facts it had not finished are then lost, because the thread dies with
+        the process.
+        """
+        if self.service is None:
+            return True
+        if timeout is None:
+            timeout = extraction_wait_seconds()
+        self.service.stop(timeout=timeout)
+        return not any(
+            t.name == _MEMORY_THREAD_NAME and t.is_alive()
+            for t in threading.enumerate()
+        )
 
 
 def open_session(
@@ -169,4 +206,8 @@ def run_repl(session: ChatSession) -> None:
         print()
     finally:
         print("Saving memory (waiting for fact extraction to finish)...")
-        session.close()
+        if not session.close():
+            print(
+                "Fact extraction was still running, so the pending facts "
+                "were not saved."
+            )
