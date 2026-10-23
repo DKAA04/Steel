@@ -93,14 +93,16 @@ Third parties appear in the English case and in the tuning set (all invented):
 
 Problems: the names, relationships, schedules and health or retirement status of people who never spoke to STEEL are stored as plain text, indistinguishable from facts about you, copied into prompts, and (in some wordings) left without a subject ("Su padre está jubilado."). `steel forget` finds them only by shared words.
 
-**Proposal (not implemented, needs your OK):**
+**Decision (owner, 2026-10-23): facts about other people stay as stored.** Nothing in the code changes for them. They are ordinary facts: covered by the `memory:read:facts` scope in the permission policy (see [POLICY.md](POLICY.md)), so a tool can read them only if it was granted that scope. Per-person handling is revisited when a tool can first read memory.
 
-1. **Flag, don't block.** A deterministic check marks any entry that mentions a capitalised name other than the user's own, and `steel memory list` shows a `[person: Mara]` tag. No model call.
-2. **`steel forget --person NAME`** lists every entry mentioning that name (facts and notes, any language, accent-insensitive) and deletes them with `--confirm`, hashing each text so it is not re-extracted verbatim.
-3. **Minimise by default:** facts whose subject is not the user ("Mara is visiting...", "Su padre está jubilado") go to the 7-day review notes instead of the durable file; only "User has a sister named Mara"-style relationship facts stay durable, unless you promote the rest with `steel remember`.
-4. **Decide as the owner:** whether names of family should be stored at all, or only the relationship ("User has a sister"). Option 4 is a product decision, not a code one. No legal conclusion is drawn here.
+The earlier proposal is kept here as the list of options to revisit then. None of it is implemented:
 
-Limits of this proposal: a name detector based on capital letters misses lower-case names and flags places and brands; relationship words differ across languages; and the model sometimes drops the subject, so "who is this about" is a guess.
+1. Flag, don't block: a deterministic check marks entries that mention a capitalised name other than the user's own, shown as a `[person: Mara]` tag in `steel memory list`.
+2. `steel forget --person NAME`: list every entry mentioning that name (facts and notes, accent-insensitive) and delete them with `--confirm`.
+3. Route facts whose subject is not the user to the 7-day notes instead of the durable file.
+4. A product decision on whether family names should be stored at all, or only the relationship ("User has a sister").
+
+Limits of these options: a name detector based on capital letters misses lower-case names and flags places and brands; relationship words differ across languages; and the model sometimes drops the subject, so "who is this about" is a guess.
 
 ## Phase 1 results (kept for comparison)
 
