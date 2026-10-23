@@ -135,6 +135,11 @@ class SteelFactStore(LocalFactStore):
         stored = super().add(text, source=source, trust=trust)
         return AddResult("stored" if stored else "duplicate", fact_id(text))
 
+    def mark_forgotten(self, text: str) -> None:
+        """Record the hash of *text* (e.g. a forgotten note) without storing it."""
+        with self._lock, _cross_process_lock(self._lock_path()):
+            self._write_forgotten(self.forgotten_ids() | {fact_id(text)})
+
     def forget(self, fid: str) -> bool:
         """Remove the fact with this id; return whether one was removed."""
         # Same locks as upstream add/clear: thread lock + cross-process lock.

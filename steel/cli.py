@@ -4,7 +4,7 @@ steel doctor              check pin, Rust extension, config and permissions
 steel chat                chat with automatic memory (no tools)
 steel memory list         every remembered entry, with ids
 steel memory audit        state of every store that can hold conversation text
-steel forget ID           delete exactly one entry
+steel forget ID [--with-related]   delete one entry (and optionally its neighbours)
 steel wipe --confirm      empty every memory store
 steel notes ...           the original expiring-note commands
 """
@@ -73,6 +73,11 @@ def main(argv: list[str] | None = None) -> int:
     mem.add_argument("action", choices=["list", "audit"])
     forget = sub.add_parser("forget", help="Delete exactly one entry by id.")
     forget.add_argument("id")
+    forget.add_argument(
+        "--with-related",
+        action="store_true",
+        help="Also delete related facts (they are always listed first).",
+    )
     wipe = sub.add_parser("wipe", help="Empty every memory store.")
     wipe.add_argument("--confirm", action="store_true")
     notes = sub.add_parser("notes", help="Original expiring-note commands.")
@@ -117,10 +122,17 @@ def main(argv: list[str] | None = None) -> int:
         for name, state in memory.audit().items():
             print(f"{name}: {state}")
     elif args.command == "forget":
-        if not memory.forget(args.id):
+        result = memory.forget(args.id, with_related=args.with_related)
+        if not result:
             print(f"No entry with id {args.id}.", file=sys.stderr)
             return 1
         print(f"Forgot {args.id}.")
+        for entry in result.removed[1:]:
+            print(f"Also forgot {entry.id}\t{entry.text}")
+        if result.related:
+            print("Related entries still stored (add --with-related to remove them):")
+            for entry in result.related:
+                print(f"  {entry.id}\t{entry.text}")
     elif args.command == "wipe":
         removed = memory.wipe()
         print("Removed: " + (", ".join(removed) if removed else "nothing"))

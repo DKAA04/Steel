@@ -7,7 +7,9 @@ OpenJarvis home via $OPENJARVIS_HOME.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
+import io
 import json
 import os
 import sqlite3
@@ -15,7 +17,7 @@ import stat
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 from unittest import mock
 
 from openjarvis.core.config import JarvisConfig
@@ -208,6 +210,58 @@ class ForgetTest(HomeTestCase):
         memory = SteelMemory(self.home)
         for bad in ["f-000000000000", "m-nothing", "n-nothing", "x-1", ""]:
             self.assertFalse(memory.forget(bad))
+
+
+class ForgetRelatedTest(HomeTestCase):
+    FACTS: ClassVar[list[str]] = [
+        "User's favorite tea is genmaicha",
+        "User enjoys genmaicha with a roasted rice flavor",
+        "User lives in Rotterdam",
+    ]
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.memory = SteelMemory(self.home)
+        for text in self.FACTS:
+            self.memory.facts.add(text)
+
+    def test_default_removes_only_the_target_and_lists_neighbours(self) -> None:
+        result = self.memory.forget(fact_id(self.FACTS[0]))
+        self.assertEqual([e.text for e in result.removed], [self.FACTS[0]])
+        self.assertEqual([e.text for e in result.related], [self.FACTS[1]])
+        texts = [e.text for e in self.memory.entries()]
+        self.assertEqual(texts, self.FACTS[1:])
+
+    def test_with_related_removes_neighbours_and_hashes_them(self) -> None:
+        result = self.memory.forget(fact_id(self.FACTS[0]), with_related=True)
+        self.assertEqual([e.text for e in result.removed], self.FACTS[:2])
+        self.assertEqual([e.text for e in self.memory.entries()], self.FACTS[2:])
+        # Both removed facts are blocked from coming back verbatim...
+        for text in self.FACTS[:2]:
+            self.assertFalse(self.memory.facts.add(text))
+        # ...and the forgotten list holds hashes only.
+        raw = self.memory.facts.forgotten_path.read_text()
+        self.assertNotIn("genmaicha", raw)
+        self.assertEqual(len(self.memory.facts.forgotten_ids()), 2)
+
+    def test_cli_lists_neighbours_and_needs_flag_to_remove_them(self) -> None:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(["forget", fact_id(self.FACTS[0])]), 0)
+        self.assertIn("--with-related", out.getvalue())
+        self.assertIn(self.FACTS[1], out.getvalue())
+        self.assertEqual(len(SteelMemory(self.home).entries()), 2)
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(
+                main(["forget", fact_id(self.FACTS[1]), "--with-related"]), 0
+            )
+        self.assertEqual(len(SteelMemory(self.home).entries()), 1)
+
+    def test_unknown_id_removes_nothing(self) -> None:
+        result = self.memory.forget("f-000000000000", with_related=True)
+        self.assertFalse(result)
+        self.assertEqual(len(self.memory.entries()), 3)
 
 
 class WipeTest(HomeTestCase):

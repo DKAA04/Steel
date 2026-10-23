@@ -20,6 +20,7 @@ from steel.facts import FACT_PREFIX, SteelFactStore, fact_id
 from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, USER_MD
 from steel.memory_files import MemoryFile
 from steel.notes import MemoryStore
+from steel.similarity import is_related
 
 NOTE_PREFIX = "n-"
 
@@ -43,6 +44,17 @@ class Entry:
     id: str
     store: str
     text: str
+
+
+@dataclass
+class ForgetResult:
+    """Outcome of ``SteelMemory.forget``."""
+
+    removed: list[Entry]  # entries deleted (the target, plus neighbours if asked)
+    related: list[Entry]  # related entries still stored (not removed)
+
+    def __bool__(self) -> bool:
+        return bool(self.removed)
 
 
 class SteelMemory:
@@ -87,20 +99,56 @@ class SteelMemory:
                 ]
         return entries
 
-    def forget(self, entry_id: str) -> bool:
+    def related(self, entry_id: str) -> list[Entry]:
+        """Facts and notes that look related to this one (loose word overlap)."""
+        everything = self.entries()
+        target = next((e for e in everything if e.id == entry_id), None)
+        if target is None or not entry_id.startswith((FACT_PREFIX, NOTE_PREFIX)):
+            return []
+        return [
+            e
+            for e in everything
+            if e.id != entry_id
+            and e.id.startswith((FACT_PREFIX, NOTE_PREFIX))
+            and is_related(target.text, e.text)
+        ]
+
+    def forget(self, entry_id: str, *, with_related: bool = False) -> ForgetResult:
+        """Delete one entry; with_related also deletes its related neighbours.
+
+        Every forgotten fact or note has its hash added to the forgotten list,
+        so the extractor cannot store the same text again.
+        """
+        target = next((e for e in self.entries() if e.id == entry_id), None)
+        if target is None:
+            return ForgetResult([], [])
+        # Find neighbours BEFORE deleting: afterwards the target is gone.
+        neighbours = self.related(entry_id)
+        if not self._forget_one(target):
+            return ForgetResult([], [])
+        if not with_related:
+            return ForgetResult([target], neighbours)
+        removed = [target] + [n for n in neighbours if self._forget_one(n)]
+        return ForgetResult(removed, [])
+
+    def _forget_one(self, entry: Entry) -> bool:
         """Delete exactly one entry, chosen by the prefix of its id."""
-        if entry_id.startswith(FACT_PREFIX):
-            return self.facts.forget(entry_id)
-        if entry_id.startswith("m-"):
-            return self.memory_md.forget(entry_id)
-        if entry_id.startswith("u-"):
-            return self.user_md.forget(entry_id)
-        if entry_id.startswith(NOTE_PREFIX):
+        if entry.id.startswith(FACT_PREFIX):
+            return self.facts.forget(entry.id)
+        if entry.id.startswith("m-"):
+            return self.memory_md.forget(entry.id)
+        if entry.id.startswith("u-"):
+            return self.user_md.forget(entry.id)
+        if entry.id.startswith(NOTE_PREFIX):
             notes = self._notes()
             if notes is None:
                 return False
             with notes:
-                return notes.forget(entry_id[len(NOTE_PREFIX) :])
+                gone = notes.forget(entry.id[len(NOTE_PREFIX) :])
+            if gone:
+                # Notes can be re-extracted too: keep only the hash of the text.
+                self.facts.mark_forgotten(entry.text)
+            return gone
         return False
 
     def wipe(self) -> list[str]:
