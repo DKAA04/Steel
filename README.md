@@ -2,7 +2,7 @@
 
 **A personal assistant layer on top of [OpenJarvis](https://github.com/open-jarvis/OpenJarvis), starting with persistent, user-controlled memory.**
 
-STEEL is planned as a room-scale assistant that hears, sees and remembers. Today (Phase 1) it is a text chat with **persistent memory you can list, forget item by item, and wipe**. It has **no tools**: it cannot browse, run code, read files or act outside the conversation. Voice, vision, tools, the mobile bridge and security tooling are planned, not implemented.
+STEEL is planned as a room-scale assistant that hears, sees and remembers. Today (Phase 1b) it is a text chat with **persistent memory you can list, add to, forget item by item, and wipe**. It has **no tools**: it cannot browse, run code, read files or act outside the conversation. Voice, vision, tools, the mobile bridge and security tooling are planned, not implemented.
 
 ## Requirements
 
@@ -54,31 +54,44 @@ export OPENJARVIS_NO_UPDATE_CHECK=1
 ## Use
 
 ```bash
-steel doctor                 # pin, Rust extension, config, permissions
-steel chat                   # chat; facts are extracted in the background
-steel memory list            # every remembered entry with its id
-steel memory audit           # state of every store that can hold chat text
-steel forget f-1a2b3c4d5e6f  # delete exactly one entry
-steel wipe --confirm         # empty every memory store
+steel doctor                      # pin, Rust extension, config, permissions
+steel chat                        # chat; facts are extracted in the background
+steel memory list                 # every remembered entry, with id and expiry
+steel memory audit                # state of every store that can hold chat text
+steel remember "User is vegetarian"            # trusted durable fact
+steel remember "Dentist Friday 10:00" --days 3 # expiring note (1-7 days)
+steel forget f-1a2b3c4d5e6f       # delete one entry, list related ones
+steel forget f-1a2b3c4d5e6f --with-related     # ...and delete the related ones too
+steel wipe --confirm              # empty every memory store
 steel notes --db PATH --allow-persistence remember "..."   # original expiring notes
 ```
 
-Every `steel` command sets `~/.openjarvis` to mode 700 and the files directly inside it to 600.
+Every `steel` command sets `~/.openjarvis` to mode 700 and the files directly inside it to 600. Text you pass on the command line can end up in your shell history.
+
+### How memory works
+
+- **Only your messages are read.** After each reply the extractor sees what *you* typed, never STEEL's answer, so STEEL cannot turn its own words into "facts about you".
+- **Near-duplicates are skipped.** A new fact is dropped if 80% of its words are already in an existing fact (English and Spanish; case, accents and punctuation ignored; negations and numbers must match). No model call is involved. Thresholds are in `steel/similarity.py`.
+- **Short-lived facts expire.** Facts with a time word ("tomorrow", "next weekend", "mañana", "este fin de semana"...) are stored as 7-day notes, not durable facts. Month- and year-scale words ("next month") are kept durable.
+- **Forget blocks the same text, not the same idea.** `steel forget` removes the entry and remembers a hash of its text so the same wording is not stored again. `--with-related` also removes entries that share words with it. A reworded or translated version of the same idea will be stored again. See [SECURITY.md](SECURITY.md).
+- **`steel remember`** stores your own statement as a trusted fact (or as an expiring note with `--days`), even if you forgot the same text earlier.
 
 ### Where memory lives
 
 | Id prefix | File in `~/.openjarvis` | What writes it |
 | --- | --- | --- |
-| `f-` | `memory_facts.jsonl` | OpenJarvis MemoryService during `steel chat` (model-extracted facts) |
+| `f-` | `memory_facts.jsonl` | OpenJarvis MemoryService during `steel chat` (model-extracted facts), and `steel remember` (trusted) |
+| `n-` | `steel_notes.sqlite3` | Time-bound facts from `steel chat`, `steel remember --days`, and `steel notes`. Expiring notes; the same store is kept for future room observations |
 | `m-` | `MEMORY.md` | You (by hand) or other OpenJarvis commands; STEEL only reads it |
 | `u-` | `USER.md` | You (by hand) or other OpenJarvis commands; STEEL only reads it |
-| `n-` | `steel_notes.sqlite3` | `steel notes`; expiring notes, kept as the future short-term room-observation store |
+
+`steel_forgotten.json` holds hashes of forgotten texts (not the texts).
 
 `steel wipe` also deletes the OpenJarvis databases that can hold conversation text when other `jarvis` commands run: `traces.db`, `sessions.db`, `agents.db`, `memory.db` and `audit.db`. See [SECURITY.md](SECURITY.md) for what each holds and what is not erased.
 
 ### How well extraction works
 
-Facts are extracted by the small local model `qwen3.5:2b`. It skips small talk, one-off questions and an obvious injection attempt, but it is noisy in ways that matter. It turns phrases from STEEL's own replies into "facts" about you, splits one sentence into near-duplicate facts, and stores short-lived plans with no expiry. The main effect: **forgetting one fact does not stop STEEL from re-learning a reworded version of it.** Measured results are in [docs/MEMORY_QUALITY.md](docs/MEMORY_QUALITY.md).
+Facts are extracted by the small local model `qwen3.5:2b` and it is not perfect. On the 12 invented test exchanges Phase 1b stores no junk and no stale plans, but it **missed one real fact** (a preference about answer style), can answer in the wrong language, is slower (4–6 s per message in the background), and re-learns an idea if you say it in other words after you forgot it. Check `steel memory list` from time to time. Measured results, including what got worse, are in [docs/MEMORY_QUALITY.md](docs/MEMORY_QUALITY.md). Facts about other people you mention ("my sister Mara") are stored like any other; see the proposal in that document.
 
 ## Implementation status
 
@@ -86,8 +99,8 @@ Facts are extracted by the small local model `qwen3.5:2b`. It skips small talk, 
 | --- | --- |
 | Packaging | Implemented: `pyproject.toml`, `steel` entry point, OpenJarvis pinned to one commit |
 | Chat | Implemented: `steel chat`, direct model calls, no agent, no tools, history in RAM only |
-| Persistent memory | Implemented: OpenJarvis MemoryService + `SteelFactStore`; list, forget by id, wipe |
-| Expiring notes | Implemented: opt-in SQLite notes with expiry (future room-observation store) |
+| Persistent memory | Implemented: OpenJarvis MemoryService + `SteelFactStore`; user-only extraction, duplicate guard, 7-day notes for time-bound facts, `remember`, list, forget (with related), wipe |
+| Expiring notes | Implemented: SQLite notes with expiry; hold time-bound facts and `remember --days`, and are kept for future room observations |
 | Tools / permission policy | Planned (Phase 2: `SteelPolicy` before any tool is registered) |
 | Voice / vision | Planned; no microphones, cameras or identity recognition are connected |
 | API / Flutter bridge | Planned; no listening service |
@@ -101,12 +114,13 @@ Facts are extracted by the small local model `qwen3.5:2b`. It skips small talk, 
 ruff check steel tests && ruff format --check steel tests
 mypy steel
 pytest -q        # never calls the live model
+python scripts/quality_check.py /tmp/steel-qc   # live model, scratch dir; optional
 ```
 
 ## Credits and provenance
 
 STEEL is built on **OpenJarvis** (Apache-2.0, https://github.com/open-jarvis/OpenJarvis). It imports the OpenJarvis core (config, event bus, engine, guardrails, MemoryService, fact extractor, fact store) and does not copy or modify it. No OpenJarvis files are ported in this phase; any future port is listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
 
-The original repository was a directory scaffold and architecture outline. The first offline note store and docs were written with Codex assistance in September 2026. The Phase 1 OpenJarvis integration (packaging, memory layer, chat, tests and docs) was written with Claude Code (Claude Opus 5.5) in October 2026 and reviewed by the repository owner. Do not present this as a finished room-scale AI system or as deployed client work.
+The original repository was a directory scaffold and architecture outline. The first offline note store and docs were written with Codex assistance in September 2026. The Phase 1 OpenJarvis integration (packaging, memory layer, chat, tests and docs) was written with Claude Code (Claude Opus 5.5) and the Phase 1b memory-quality work (user-only extraction, duplicate guard, time-bound notes, `remember`, related forget) with Claude Code (Claude Sonnet 5.5), both in October 2026 and reviewed by the repository owner. Do not present this as a finished room-scale AI system or as deployed client work.
 
 No GDPR compliance, security audit or production-readiness is claimed.

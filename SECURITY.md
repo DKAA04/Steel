@@ -8,11 +8,11 @@ Everything lives under the OpenJarvis home (`~/.openjarvis`, or `$OPENJARVIS_HOM
 
 | File | Holds | Written by `steel chat`? | Wiped by `steel wipe`? |
 | --- | --- | --- | --- |
-| `memory_facts.jsonl` | Model-extracted facts about you, in plain text | Yes | Yes |
+| `memory_facts.jsonl` | Model-extracted facts about you, and facts from `steel remember`, in plain text | Yes | Yes |
 | `memory_facts.jsonl.lock` | Nothing (empty lock file) | Yes | Yes |
 | `steel_forgotten.json` | Hashes of facts you forgot, never the text | On `steel forget` | Yes |
 | `MEMORY.md`, `USER.md` | Lines you or other OpenJarvis commands wrote | No (read only) | Reset to header |
-| `steel_notes.sqlite3` | Expiring notes | No (`steel notes` only) | Yes |
+| `steel_notes.sqlite3` | Expiring notes: time-bound facts extracted from your messages, `steel remember --days`, `steel notes` | Yes (time-bound facts) | Yes |
 | `audit.db` | Security findings: pattern names (e.g. "email") and timestamps; boundary-guard alerts keep an **80-character preview** of the text | Yes (pattern names only; tested) | Yes |
 | `traces.db` | Raw queries and model results | No; disabled in config | Yes |
 | `sessions.db` | Full chat messages of cross-channel sessions | No | Yes |
@@ -27,8 +27,12 @@ Wiping `audit.db` also deletes its tamper-evident security history. This is deli
 ## Known limits
 
 - **Not encrypted.** Facts, notes and memory files are plain text on disk. Do not store passwords, tokens, health or client data.
-- **Facts are guessed by a small model.** `qwen3.5:2b` sometimes records things you never said, often taken from STEEL's own replies. Check `steel memory list` regularly. See [docs/MEMORY_QUALITY.md](docs/MEMORY_QUALITY.md).
-- **Forget blocks exact repeats only.** `steel forget` removes the fact and records its hash so the extractor cannot store the same text again (ignoring case and surrounding spaces). A reworded version is new text and will be stored. Other facts that mention the same thing are not touched.
+- **Facts are guessed by a small model.** `qwen3.5:2b` reads only your messages (never STEEL's replies), but it can still misstate things (for example "lives in" for "from"), miss facts, switch language, and store vague fragments. Check `steel memory list` regularly. See [docs/MEMORY_QUALITY.md](docs/MEMORY_QUALITY.md).
+- **Forget blocks the same text, not the same idea.** `steel forget` removes the entry and records its hash so the extractor cannot store the same text again (ignoring case and surrounding spaces; punctuation or accent changes are a different hash). A reworded or translated version is new text and will be stored again; this was measured live (English rewording and a Spanish version both came back). `--with-related` also deletes entries sharing words with the target and hashes each of them, but it can miss vague or differently worded neighbours.
+- **Near-duplicate skipping is word overlap.** A new fact is skipped when 80% of its content words are already in an existing fact (`steel/similarity.py`). It does not understand synonyms or other languages, and a fact that only repeats words of an older one is dropped even if you meant it. `steel remember` is checked the same way and reports the existing entry.
+- **Time words decide what expires.** Facts containing a short-term expression are stored as 7-day notes instead of durable facts. If the model drops the time word from its wording, the fact is stored durably. Notes are included in STEEL's prompt while they are alive and are purged when the store is next read, not by a background job.
+- **Other people.** Facts you state about other people ("my sister Mara...") are stored as plain text like any other fact, are copied into prompts, and are found by `forget` only through shared words. There is no per-person handling yet; a proposal is in docs/MEMORY_QUALITY.md.
+- **Command-line text is visible to your shell.** `steel remember "..."` stores your text in your shell history. Use `steel chat` for anything sensitive, and avoid storing secrets at all.
 - **The forgotten list is a hash, not secrecy.** Someone who can read `steel_forgotten.json` cannot read the text back, but can confirm a guess (hash the guess and compare). `steel wipe` deletes the list.
 - **Oldest facts are evicted silently.** OpenJarvis' `LocalFactStore` keeps at most `max_facts` facts (default **1000**). When a new fact goes over the cap, the oldest ones are dropped without any warning or log message.
 - **Guardrails redact before the model.** In the `personal` profile, e-mail addresses, keys and similar patterns are redacted in model input and output, so facts containing them are stored redacted.
