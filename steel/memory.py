@@ -17,11 +17,21 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 
-from steel.facts import FACT_PREFIX, NOTE_PREFIX, SteelFactStore, fact_id
+from steel.facts import (
+    FACT_PREFIX,
+    NOTE_PREFIX,
+    AddResult,
+    SteelFactStore,
+    fact_id,
+)
 from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, USER_MD
 from steel.memory_files import MemoryFile
 from steel.notes import MemoryStore
 from steel.similarity import is_related
+
+# Limits for `steel remember`.
+MAX_REMEMBER_CHARS = 500
+MAX_REMEMBER_DAYS = 7
 
 # OpenJarvis SQLite files that can contain conversation text (pinned commit).
 # name -> what text it can hold.
@@ -106,6 +116,21 @@ class SteelMemory:
                     for note_id, text, expires in notes.entries()
                 ]
         return entries
+
+    def remember(self, text: str, *, days: float | None = None) -> AddResult:
+        """``steel remember``: a trusted durable fact, or an expiring note.
+
+        Raises ValueError for blank or over-long text, or for days outside
+        (0, 7].
+        """
+        text = text.strip()
+        if not text or len(text) > MAX_REMEMBER_CHARS:
+            raise ValueError(f"Text must be 1-{MAX_REMEMBER_CHARS} characters.")
+        if days is None:
+            return self.facts.add_checked(text, source="user", explicit=True)
+        if not 0 < days <= MAX_REMEMBER_DAYS:
+            raise ValueError(f"--days must be above 0 and at most {MAX_REMEMBER_DAYS}.")
+        return self.facts.add_note(text, ttl_hours=days * 24)
 
     def related(self, entry_id: str) -> list[Entry]:
         """Facts and notes that look related to this one (loose word overlap)."""

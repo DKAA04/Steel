@@ -36,6 +36,7 @@ from pathlib import Path
 
 from openjarvis.memory.store import (
     RECALLABLE_TRUST_TIERS,
+    TRUST_TRUSTED,
     Fact,
     LocalFactStore,
     _cross_process_lock,
@@ -131,13 +132,23 @@ class SteelFactStore(LocalFactStore):
         # Upstream add_with_trust / add_many* all funnel through add().
         return self.add_checked(text, source, trust).stored
 
-    def add_checked(self, text: str, source: str = "", trust: str = "") -> AddResult:
-        """Like add(), but says why a fact was not stored."""
+    def add_checked(
+        self, text: str, source: str = "", trust: str = "", *, explicit: bool = False
+    ) -> AddResult:
+        """Like add(), but says why a fact was not stored.
+
+        explicit=True means the user typed it (``steel remember``): it is stored
+        as TRUST_TRUSTED, ignores and clears any forgotten hash for the same
+        text, and is never routed to the expiring notes by time words.
+        """
         text = (text or "").strip()
         if not text:
             return AddResult("blank")
+        if explicit:
+            trust = TRUST_TRUSTED
+            self.unforget(text)  # the user changed their mind
         # A forgotten fact (same text, ignoring case) is never stored again.
-        if fact_id(text) in self.forgotten_ids():
+        elif fact_id(text) in self.forgotten_ids():
             return AddResult("forgotten")
         # Near-duplicate guard. It only runs for recallable facts: a quarantined
         # (untrusted) copy must still reach upstream add(), which uses it to
@@ -149,7 +160,8 @@ class SteelFactStore(LocalFactStore):
         # Short-lived facts ("visiting next weekend") go to the expiring notes.
         # Quarantined facts never do: notes carry no trust marker.
         if (
-            self._notes_path is not None
+            not explicit
+            and self._notes_path is not None
             and (trust or "").strip().lower() in RECALLABLE_TRUST_TIERS
             and is_time_bound(text)
         ):
@@ -157,15 +169,34 @@ class SteelFactStore(LocalFactStore):
         stored = super().add(text, source=source, trust=trust)
         return AddResult("stored" if stored else "duplicate", fact_id(text))
 
-    def _add_note(self, text: str) -> AddResult:
+    def _add_note(
+        self, text: str, ttl_hours: float = TIME_BOUND_TTL_HOURS
+    ) -> AddResult:
         """Store *text* as an expiring note unless a similar note exists."""
         assert self._notes_path is not None
         with MemoryStore(self._notes_path, allow_persistence=True) as notes:
             for note_id, old_text, _expires in notes.entries():
                 if is_near_duplicate(text, old_text):
                     return AddResult("duplicate", NOTE_PREFIX + note_id)
-            note_id = notes.remember(text, ttl_hours=TIME_BOUND_TTL_HOURS)
+            note_id = notes.remember(text, ttl_hours=ttl_hours)
         return AddResult("note", NOTE_PREFIX + note_id)
+
+    def add_note(self, text: str, ttl_hours: float) -> AddResult:
+        """Explicitly store an expiring note (``steel remember --days``)."""
+        text = (text or "").strip()
+        if not text:
+            return AddResult("blank")
+        self.unforget(text)  # the user changed their mind
+        return self._add_note(text, ttl_hours)
+
+    def unforget(self, text: str) -> bool:
+        """Remove the forgotten hash of *text*; True if there was one."""
+        with self._lock, _cross_process_lock(self._lock_path()):
+            ids = self.forgotten_ids()
+            if fact_id(text) not in ids:
+                return False
+            self._write_forgotten(ids - {fact_id(text)})
+        return True
 
     def mark_forgotten(self, text: str) -> None:
         """Record the hash of *text* (e.g. a forgotten note) without storing it."""

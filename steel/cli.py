@@ -4,7 +4,8 @@ steel doctor              check pin, Rust extension, config and permissions
 steel chat                chat with automatic memory (no tools)
 steel memory list         every remembered entry, with ids
 steel memory audit        state of every store that can hold conversation text
-steel forget ID [--with-related]   delete one entry (and optionally its neighbours)
+steel remember TEXT [--days N]    store a trusted fact, or an expiring note (N <= 7)
+steel forget ID [--with-related]  delete one entry (and optionally its neighbours)
 steel wipe --confirm      empty every memory store
 steel notes ...           the original expiring-note commands
 """
@@ -71,6 +72,15 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("chat", help="Chat with automatic memory and no tools.")
     mem = sub.add_parser("memory", help="Inspect memory.")
     mem.add_argument("action", choices=["list", "audit"])
+    remember = sub.add_parser(
+        "remember", help="Store a fact you state yourself (trusted)."
+    )
+    remember.add_argument("text")
+    remember.add_argument(
+        "--days",
+        type=float,
+        help="Keep it only this many days (up to 7) as an expiring note.",
+    )
     forget = sub.add_parser("forget", help="Delete exactly one entry by id.")
     forget.add_argument("id")
     forget.add_argument(
@@ -121,6 +131,17 @@ def main(argv: list[str] | None = None) -> int:
     elif args.command == "memory":
         for name, state in memory.audit().items():
             print(f"{name}: {state}")
+    elif args.command == "remember":
+        try:
+            added = memory.remember(args.text, days=args.days)
+        except ValueError as exc:
+            parser.error(str(exc))
+        if added.outcome == "duplicate":
+            print(f"Already remembered as {added.entry_id}; nothing added.")
+        elif added.outcome == "note":
+            print(f"Remembered as {added.entry_id} (expires in {args.days:g} days).")
+        else:
+            print(f"Remembered as {added.entry_id} (trusted).")
     elif args.command == "forget":
         result = memory.forget(args.id, with_related=args.with_related)
         if not result:

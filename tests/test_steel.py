@@ -331,6 +331,84 @@ class ForgetRelatedTest(HomeTestCase):
         self.assertEqual(len(self.memory.entries()), 3)
 
 
+class RememberTest(HomeTestCase):
+    def run_cli(self, *argv: str) -> str:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertEqual(main(list(argv)), 0)
+        return out.getvalue()
+
+    def test_remember_stores_a_trusted_durable_fact(self) -> None:
+        text = self.run_cli("remember", "User is vegetarian")
+        self.assertIn("(trusted)", text)
+        [fact] = SteelMemory(self.home).facts.list()
+        self.assertEqual(fact.trust, "trusted")
+        self.assertEqual(fact.source, "user")
+        listing = self.run_cli("memory", "list")
+        self.assertIn("facts (trusted)", listing)
+
+    def test_remember_ignores_time_words_because_the_user_chose_durable(self) -> None:
+        self.run_cli("remember", "I run every day, today and tomorrow")
+        memory = SteelMemory(self.home)
+        self.assertEqual(memory.facts.count(), 1)
+
+    def test_remember_days_stores_an_expiring_note(self) -> None:
+        text = self.run_cli("remember", "Dentist appointment on the 3rd", "--days", "2")
+        self.assertIn("n-", text)
+        [entry] = SteelMemory(self.home).entries()
+        self.assertTrue(entry.id.startswith("n-"))
+        self.assertIn("expires", entry.store)
+        with SteelMemory(self.home).notes_store() as notes:
+            [(_id, _text, expires)] = notes.entries()
+        self.assertAlmostEqual(expires - time.time(), 2 * 86400, delta=60)
+
+    def test_days_must_be_between_0_and_7(self) -> None:
+        for bad in ["0", "-1", "7.5", "8"]:
+            with self.assertRaises(SystemExit) as error:
+                main(["remember", "x y z", "--days", bad])
+            self.assertEqual(error.exception.code, 2, bad)
+        self.assertEqual(SteelMemory(self.home).entries(), [])
+        self.run_cli("remember", "ok within a week", "--days", "7")
+
+    def test_blank_and_overlong_text_are_rejected(self) -> None:
+        for bad in ["   ", "x" * 501]:
+            with self.assertRaises(SystemExit):
+                main(["remember", bad])
+
+    def test_near_duplicate_is_reported_not_stored(self) -> None:
+        self.run_cli("remember", "User has a peanut allergy")
+        text = self.run_cli("remember", "user has peanut allergy.")
+        self.assertIn("Already remembered as f-", text)
+        self.assertEqual(SteelMemory(self.home).facts.count(), 1)
+
+    def test_remembered_entries_work_with_list_forget_and_wipe(self) -> None:
+        self.run_cli("remember", "User is vegetarian")
+        self.run_cli("remember", "Call the plumber", "--days", "3")
+        memory = SteelMemory(self.home)
+        self.assertEqual(len(memory.entries()), 2)
+        fact, note = memory.entries()
+        self.assertTrue(memory.forget(fact.id))
+        self.assertTrue(memory.forget(note.id))
+        self.assertEqual(memory.entries(), [])
+        self.run_cli("remember", "User is vegetarian")
+        self.run_cli("remember", "Call the plumber", "--days", "3")
+        self.run_cli("wipe", "--confirm")
+        self.assertTrue(SteelMemory(self.home).is_empty())
+
+    def test_explicit_remember_overrides_an_earlier_forget(self) -> None:
+        memory = SteelMemory(self.home)
+        memory.facts.add("User lives in Rotterdam")
+        memory.forget(fact_id("User lives in Rotterdam"))
+        self.assertFalse(
+            memory.facts.add("User lives in Rotterdam")
+        )  # extractor: blocked
+        self.run_cli("remember", "User lives in Rotterdam")  # the user: allowed
+        self.assertEqual(memory.facts.count(), 1)
+        self.assertNotIn(
+            fact_id("User lives in Rotterdam"), memory.facts.forgotten_ids()
+        )
+
+
 class WipeTest(HomeTestCase):
     def test_wipe_deletes_openjarvis_content_databases(self) -> None:
         for name in [
