@@ -24,9 +24,10 @@ from steel.facts import (
     SteelFactStore,
     fact_id,
 )
-from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, USER_MD
+from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, POLICY_AUDIT_FILE, USER_MD
 from steel.memory_files import MemoryFile
 from steel.notes import MemoryStore
+from steel.security.audit import PolicyAuditLog
 from steel.similarity import is_related
 
 # Limits for `steel remember`.
@@ -186,8 +187,15 @@ class SteelMemory:
             return gone
         return False
 
-    def wipe(self) -> list[str]:
-        """Empty every content store; return the names of what was removed."""
+    def policy_log_path(self) -> Path:
+        return self.home / POLICY_AUDIT_FILE
+
+    def wipe(self, *, include_audit: bool = False) -> list[str]:
+        """Empty every content store; return the names of what was removed.
+
+        The permission-decision log (names and reason codes only, no text) is
+        kept unless include_audit is True.
+        """
         removed: list[str] = []
         # clear() also deletes the forgotten-hash list and the lock file.
         if self.facts.clear():
@@ -202,6 +210,9 @@ class SteelMemory:
                 if path.exists():
                     path.unlink()
                     removed.append(path.name)
+        if include_audit and self.policy_log_path().exists():
+            self.policy_log_path().unlink()
+            removed.append(POLICY_AUDIT_FILE)
         return removed
 
     # -- audit -------------------------------------------------------------
@@ -236,6 +247,13 @@ class SteelMemory:
             ]
             report[name] = "present: " + ", ".join(present) if present else "absent"
         return report
+
+    def policy_log_state(self) -> str:
+        """State of the permission-decision log (not part of is_empty)."""
+        path = self.policy_log_path()
+        if not path.exists():
+            return "absent"
+        return f"{PolicyAuditLog(path).count()} decision(s)"
 
     def is_empty(self) -> bool:
         return all(state in ("empty", "absent") for state in self.audit().values())
