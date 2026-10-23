@@ -25,6 +25,7 @@ from openjarvis.core.config import JarvisConfig
 
 from steel.chat import ChatSession, open_session
 from steel.cli import main
+from steel.extractor import SYSTEM_PROMPT as EXTRACTOR_PROMPT
 from steel.facts import SteelFactStore, fact_id
 from steel.home import harden
 from steel.memory import SteelMemory
@@ -38,7 +39,6 @@ FAKE_FACTS = {
     "Mara": ["Mara is visiting next weekend"],
     "Lucía": ["Lucía viene mañana a cenar"],
 }
-EXTRACTOR_MARKER = "You extract durable"  # start of OpenJarvis' extractor prompt
 
 
 class FakeEngine:
@@ -53,7 +53,7 @@ class FakeEngine:
     def generate(self, messages: Any, *, model: str, **_: Any) -> dict[str, Any]:
         system = messages[0].content if messages else ""
         user = messages[-1].content
-        if system.startswith(EXTRACTOR_MARKER):
+        if system == EXTRACTOR_PROMPT:
             self.extractor_inputs.append(user)
             # Extraction call: return the facts keyed by a word in the message.
             found = [

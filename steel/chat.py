@@ -16,10 +16,10 @@ from typing import Any
 
 from openjarvis.core.events import EventBus
 from openjarvis.core.types import Message, Role
-from openjarvis.memory.extractor import FactExtractor
 from openjarvis.memory.service import MemoryService, publish_completed_exchange
 from openjarvis.tools.storage.context import ContextConfig, inject_context
 
+from steel.extractor import SteelFactExtractor
 from steel.memory import SteelMemory
 
 # Keep at most this many past messages in the prompt (RAM only).
@@ -137,7 +137,7 @@ def open_session(
     memory = SteelMemory(home, max_facts=config.memory.max_facts)
     service = None
     if config.memory.enabled:
-        extractor = FactExtractor(engine, config.memory.extraction_model or model)
+        extractor = SteelFactExtractor(engine, config.memory.extraction_model or model)
         # Our own store instead of build_memory_service(), which would create a
         # plain LocalFactStore without forget-by-id or the forgotten list.
         service = MemoryService(
