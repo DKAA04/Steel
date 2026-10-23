@@ -19,6 +19,8 @@ FORGOTTEN_FILE = "steel_forgotten.json"  # hashes of facts the user forgot
 NOTES_FILE = "steel_notes.sqlite3"  # STEEL's expiring notes (future room store)
 MEMORY_MD = "MEMORY.md"  # OpenJarvis agent memory file
 USER_MD = "USER.md"  # OpenJarvis user profile file
+POLICY_FILE = "steel_policy.json"  # permission grants, written by hand
+POLICY_AUDIT_FILE = "steel_policy_audit.jsonl"  # names-only log of decisions
 
 
 def steel_home() -> Path:
