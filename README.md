@@ -1,60 +1,112 @@
 # STEEL
 
-**A local assistant project, starting with explicit, temporary memory.**
+**A personal assistant layer on top of [OpenJarvis](https://github.com/open-jarvis/OpenJarvis), starting with persistent, user-controlled memory.**
 
-STEEL explores a room-scale assistant combining voice, vision and local tools. The current release is a small, runnable Python foundation: a command interface and SQLite note store. Voice, camera perception, LLM orchestration, the mobile bridge and security tools remain planned.
+STEEL is planned as a room-scale assistant that hears, sees and remembers. Today (Phase 1) it is a text chat with **persistent memory you can list, forget item by item, and wipe**. It has **no tools**: it cannot browse, run code, read files or act outside the conversation. Voice, vision, tools, the mobile bridge and security tooling are planned, not implemented.
 
-## Try it in 30 seconds
+## Requirements
 
-Python 3.11+; no runtime packages, accounts, model downloads or hardware required.
+- Linux, Python 3.11–3.13
+- OpenJarvis installed at `~/.openjarvis/.venv`, from commit `108d257188cbad85f2e50209d9a61669ea4dec33` (reports version `1.0.5.dev119+g108d257`). STEEL refuses to run against any other version (see `steel/pin.py`).
+- The OpenJarvis Rust extension (`import openjarvis_rust` must work).
+- [Ollama](https://ollama.com) running locally with `qwen3.5:2b` pulled.
 
-```bash
-git clone https://github.com/DKAA04/Steel.git
-cd Steel
-python -m core demo
-python -m core status
-python -m unittest discover -s tests -v
-```
-
-The demo stores an invented sensor reminder in RAM, searches it and deletes it. It does not record audio/video, make network requests or execute shell commands.
-
-## Explicit local memory
-
-For a persistent note, choose a private local directory and opt in:
+## Install
 
 ```bash
-mkdir -m 700 data
-python -m core --db data/notes.sqlite3 --allow-persistence remember "Synthetic reminder: inspect the lab sensor" --ttl-hours 24
-python -m core --db data/notes.sqlite3 --allow-persistence recall sensor
-python -m core --db data/notes.sqlite3 --allow-persistence forget NOTE_ID --confirm
+# STEEL goes into the OpenJarvis venv without reinstalling OpenJarvis.
+uv pip install --python ~/.openjarvis/.venv/bin/python --no-deps -e .
+# Dev tools (tests, lint, types) come from the [dev] extra in pyproject.toml.
+uv pip install --python ~/.openjarvis/.venv/bin/python "pytest>=8,<10" "ruff>=0.11,<1" "mypy>=1.15,<2"
+export PATH="$HOME/.openjarvis/.venv/bin:$PATH"
 ```
 
-Replace `NOTE_ID` with the identifier returned by `remember`. On Windows, create the `data` directory with access restricted to your own account. Note text supplied on a command line can enter shell history; use invented text for demonstrations and never store credentials here.
+`--no-deps` is used because OpenJarvis is already installed (editable) at the pinned commit. On a fresh machine, `pip install -e ".[dev]"` would fetch OpenJarvis from the pinned git commit, but the Rust extension must still be built as the OpenJarvis docs describe. This path has not been tested.
 
-Notes expire after 24 hours by default (maximum seven days); expired entries are removed when memory is queried. Disk storage is **unencrypted**. Deleting an entry is not a guarantee of forensic erasure from storage, backups or OS caches. See [security and privacy boundaries](SECURITY.md).
+## OpenJarvis configuration
+
+STEEL expects these settings in `~/.openjarvis/config.toml` (`steel doctor` checks them):
+
+```toml
+[tools]
+enabled = []            # no tools until the Phase 2 permission policy exists
+
+[analytics]
+enabled = false         # no PostHog usage analytics
+
+[security]
+profile = "personal"    # local guardrails: redact secrets/PII, rate limit
+
+[memory]
+enabled = true          # automatic fact extraction
+extraction_model = "qwen3.5:2b"
+
+[traces]
+enabled = false         # traces.db would store raw query and result text
+```
+
+Also put this in your shell profile so plain `jarvis` commands skip the PyPI update check too (`steel` sets it for itself):
+
+```bash
+export OPENJARVIS_NO_UPDATE_CHECK=1
+```
+
+## Use
+
+```bash
+steel doctor                 # pin, Rust extension, config, permissions
+steel chat                   # chat; facts are extracted in the background
+steel memory list            # every remembered entry with its id
+steel memory audit           # state of every store that can hold chat text
+steel forget f-1a2b3c4d5e6f  # delete exactly one entry
+steel wipe --confirm         # empty every memory store
+steel notes --db PATH --allow-persistence remember "..."   # original expiring notes
+```
+
+Every `steel` command sets `~/.openjarvis` to mode 700 and the files directly inside it to 600.
+
+### Where memory lives
+
+| Id prefix | File in `~/.openjarvis` | What writes it |
+| --- | --- | --- |
+| `f-` | `memory_facts.jsonl` | OpenJarvis MemoryService during `steel chat` (model-extracted facts) |
+| `m-` | `MEMORY.md` | You (by hand) or other OpenJarvis commands; STEEL only reads it |
+| `u-` | `USER.md` | You (by hand) or other OpenJarvis commands; STEEL only reads it |
+| `n-` | `steel_notes.sqlite3` | `steel notes`; expiring notes, kept as the future short-term room-observation store |
+
+`steel wipe` also deletes the OpenJarvis databases that can hold conversation text when other `jarvis` commands run: `traces.db`, `sessions.db`, `agents.db`, `memory.db` and `audit.db`. See [SECURITY.md](SECURITY.md) for what each holds and what is not erased.
+
+### How well extraction works
+
+Facts are extracted by the small local model `qwen3.5:2b`. It skips small talk, one-off questions and an obvious injection attempt, but it is noisy in ways that matter. It turns phrases from STEEL's own replies into "facts" about you, splits one sentence into near-duplicate facts, and stores short-lived plans with no expiry. The main effect: **forgetting one fact does not stop STEEL from re-learning a reworded version of it.** Measured results are in [docs/MEMORY_QUALITY.md](docs/MEMORY_QUALITY.md).
 
 ## Implementation status
 
 | Component | Current state |
 | --- | --- |
-| Command interface | Implemented: demo, status, remember, recall and confirmed deletion |
-| Memory | Implemented: in-memory default, opt-in SQLite storage, parameterized queries, retention checks |
+| Packaging | Implemented: `pyproject.toml`, `steel` entry point, OpenJarvis pinned to one commit |
+| Chat | Implemented: `steel chat`, direct model calls, no agent, no tools, history in RAM only |
+| Persistent memory | Implemented: OpenJarvis MemoryService + `SteelFactStore`; list, forget by id, wipe |
+| Expiring notes | Implemented: opt-in SQLite notes with expiry (future room-observation store) |
+| Tools / permission policy | Planned (Phase 2: `SteelPolicy` before any tool is registered) |
 | Voice / vision | Planned; no microphones, cameras or identity recognition are connected |
-| Agent / local model | Planned; no autonomous action execution |
 | API / Flutter bridge | Planned; no listening service |
 | Cybersecurity tools | Planned; no scanner or offensive module is shipped |
 
-[Architecture](ARCHITECTURE.md) · [Roadmap](docs/ROADMAP.md) · [Tests](tests/test_memory.py)
+[Architecture](ARCHITECTURE.md) · [Security](SECURITY.md) · [Roadmap](docs/ROADMAP.md) · [Provenance](docs/PROVENANCE.md)
 
-## Development and provenance
-
-The original repository was a directory scaffold and architecture outline. This runnable foundation, tests and documentation were added with Codex assistance during a September 2026 portfolio review. They should not be presented as a previously completed room-scale AI system or as evidence of deployed client work.
+## Development
 
 ```bash
-python -m pip install -r requirements-dev.txt
-python -m ruff check core memory tests
-python -m mypy core memory
-python -m pytest -q
+ruff check steel tests && ruff format --check steel tests
+mypy steel
+pytest -q        # never calls the live model
 ```
 
-No GDPR compliance certification or production-readiness claim is made. The broader product requires consent design, threat modelling, access control and hardware/integration evaluation before deployment.
+## Credits and provenance
+
+STEEL is built on **OpenJarvis** (Apache-2.0, https://github.com/open-jarvis/OpenJarvis). It imports the OpenJarvis core (config, event bus, engine, guardrails, MemoryService, fact extractor, fact store) and does not copy or modify it. No OpenJarvis files are ported in this phase; any future port is listed in [docs/PROVENANCE.md](docs/PROVENANCE.md).
+
+The original repository was a directory scaffold and architecture outline. The first offline note store and docs were written with Codex assistance in September 2026. The Phase 1 OpenJarvis integration (packaging, memory layer, chat, tests and docs) was written with Claude Code (Claude Opus 5.5) in October 2026 and reviewed by the repository owner. Do not present this as a finished room-scale AI system or as deployed client work.
+
+No GDPR compliance, security audit or production-readiness is claimed.

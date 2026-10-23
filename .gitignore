@@ -37,3 +37,8 @@ mobile/.flutter-plugins*
 *.db
 *.sqlite3-*
 recordings/
+
+# OpenJarvis/STEEL memory files, if a home is ever pointed here
+memory_facts.jsonl*
+steel_forgotten.json
+*.bak-*
