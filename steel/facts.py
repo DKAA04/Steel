@@ -9,6 +9,8 @@ forget one fact at a time, so this subclass adds:
 - a "forgotten" list of fact-id hashes (never the text) that ``add`` checks,
   so the extractor cannot store the very same fact again.
 
+Near-duplicates of an existing fact are skipped (steel/similarity.py).
+
 The forgotten list only blocks *exact* repeats (same text ignoring case and
 surrounding spaces). A reworded version of a forgotten fact is new text with a
 new hash and will be stored.
@@ -26,11 +28,18 @@ import hashlib
 import json
 import os
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 
-from openjarvis.memory.store import Fact, LocalFactStore, _cross_process_lock
+from openjarvis.memory.store import (
+    RECALLABLE_TRUST_TIERS,
+    Fact,
+    LocalFactStore,
+    _cross_process_lock,
+)
 
 from steel.home import FORGOTTEN_FILE
+from steel.similarity import is_near_duplicate
 
 FACT_PREFIX = "f-"
 
@@ -43,6 +52,18 @@ def fact_id(text: str) -> str:
     """
     normalised = text.strip().lower()
     return FACT_PREFIX + hashlib.sha256(normalised.encode("utf-8")).hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class AddResult:
+    """What happened to a fact offered to the store."""
+
+    outcome: str  # "stored", "blank", "forgotten" or "duplicate"
+    existing_id: str = ""  # for "duplicate": id of the fact it duplicates
+
+    @property
+    def stored(self) -> bool:
+        return self.outcome == "stored"
 
 
 class SteelFactStore(LocalFactStore):
@@ -92,11 +113,27 @@ class SteelFactStore(LocalFactStore):
     # -- FactStore API ----------------------------------------------------
 
     def add(self, text: str, source: str = "", trust: str = "") -> bool:
-        """Store a fact unless it is blank or was explicitly forgotten."""
+        """Store a fact unless it is blank, forgotten or a near-duplicate."""
         # Upstream add_with_trust / add_many* all funnel through add().
-        if (text or "").strip() and fact_id(text) in self.forgotten_ids():
-            return False
-        return super().add(text, source=source, trust=trust)
+        return self.add_checked(text, source, trust).stored
+
+    def add_checked(self, text: str, source: str = "", trust: str = "") -> AddResult:
+        """Like add(), but says why a fact was not stored."""
+        text = (text or "").strip()
+        if not text:
+            return AddResult("blank")
+        # A forgotten fact (same text, ignoring case) is never stored again.
+        if fact_id(text) in self.forgotten_ids():
+            return AddResult("forgotten")
+        # Near-duplicate guard. It only runs for recallable facts: a quarantined
+        # (untrusted) copy must still reach upstream add(), which uses it to
+        # quarantine an older clean copy of the same text.
+        if (trust or "").strip().lower() in RECALLABLE_TRUST_TIERS:
+            for fact in self.list():
+                if fact.trusted_for_recall and is_near_duplicate(text, fact.text):
+                    return AddResult("duplicate", fact_id(fact.text))
+        stored = super().add(text, source=source, trust=trust)
+        return AddResult("stored" if stored else "duplicate", fact_id(text))
 
     def forget(self, fid: str) -> bool:
         """Remove the fact with this id; return whether one was removed."""
