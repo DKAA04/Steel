@@ -83,7 +83,7 @@ def _policy_lines(home: Path) -> tuple[bool, list[str]]:
     grants = sum(len(a.grants) for a in policy.agents().values())
     lines = [
         "policy: deny-by-default active" if probe_denied else "policy: NOT denying",
-        f"policy grants: {grants} in {POLICY_FILE} (no tools are registered)",
+        f"policy grants: {grants} in {POLICY_FILE}",
     ]
     return probe_denied, lines
 

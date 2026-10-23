@@ -148,9 +148,7 @@ class DoctorPolicyTest(PolicyCliCase):
             main(["doctor"])
         lines = out.getvalue().splitlines()
         self.assertIn("policy: deny-by-default active", lines)
-        self.assertIn(
-            "policy grants: 0 in steel_policy.json (no tools are registered)", lines
-        )
+        self.assertIn("policy grants: 0 in steel_policy.json", lines)
         self.assertFalse((self.home / LOG).exists())
 
     def test_doctor_counts_grants(self) -> None:

@@ -1,6 +1,6 @@
 # Security and privacy boundaries
 
-STEEL is an early personal prototype for one trusted local user. Phase 1 has **persistent memory and no tools**. It has no microphone or camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
+STEEL is an early personal prototype for one trusted local user. It has **persistent memory and no tools**. A deny-by-default permission policy exists (Phase 2a, [docs/POLICY.md](docs/POLICY.md)) but nothing is connected to it yet. It has no microphone or camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
 
 ## What is stored, and where
 
@@ -13,6 +13,8 @@ Everything lives under the OpenJarvis home (`~/.openjarvis`, or `$OPENJARVIS_HOM
 | `steel_forgotten.json` | Hashes of facts you forgot, never the text | On `steel forget` | Yes |
 | `MEMORY.md`, `USER.md` | Lines you or other OpenJarvis commands wrote | No (read only) | Reset to header |
 | `steel_notes.sqlite3` | Expiring notes, each labelled with a source (`user`: `steel remember --days`, `steel notes`; `time_bound`: extracted from your messages; `room`: reserved, nothing writes it) | Yes (time-bound facts) | Yes |
+| `steel_policy.json` | Permission grants you wrote by hand. Absent by default (= nothing is granted) | No (never written by STEEL) | **No** |
+| `steel_policy_audit.jsonl` | Permission decisions: time, agent id, capability, allow/deny, reason code. No paths, tool arguments or text | No (nothing calls the policy yet; `steel doctor` and `steel policy show` only read) | **No, unless `steel wipe --confirm --include-audit`** |
 | `audit.db` | Security findings: pattern names (e.g. "email") and timestamps; boundary-guard alerts keep an **80-character preview** of the text | Yes (pattern names only; tested) | Yes |
 | `traces.db` | Raw queries and model results | No; disabled in config | Yes |
 | `sessions.db` | Full chat messages of cross-channel sessions | No | Yes |
@@ -44,8 +46,20 @@ Wiping `audit.db` also deletes its tamper-evident security history. This is deli
 - The OpenJarvis `memory_manage` tool is **not** registered: its `remove` deletes every line containing the given text.
 - `SteelFactStore` depends on private members of OpenJarvis' `LocalFactStore` at the pinned commit. `steel` refuses to run against another OpenJarvis version.
 
+## Permission policy limits
+
+Full list in [docs/POLICY.md](docs/POLICY.md) section 4. In short:
+
+- **It is not a sandbox.** It decides only for calls made through the `ToolExecutor` that `build_executor` returns. Code running in the STEEL process can ignore it. Tools are trusted code.
+- **No tool exists yet**, so the policy has been tested with fake tools only.
+- **File rules cover declared path arguments only** and are checked at one moment (a symlink swapped later is not caught). Other capabilities (`net:outbound`, `shell:exec`, memory) are all-or-nothing per tool: they do not limit hosts, commands or which memory entries.
+- **The grants file is yours.** Whoever can write `steel_policy.json` can grant anything. STEEL refuses it only if it is a symlink, owned by someone else, or writable by group/others. A broken file means nothing is granted.
+- **A bare `*` grant is broad**: it covers `shell:exec`, `net:outbound` and `memory:write`, but never sensors or file paths.
+- **The decision log** is a plain file: not encrypted, not tamper-evident, not rotated, deletable by anyone who can write the home directory. `steel wipe` keeps it unless `--include-audit` is given.
+- **Facts about other people** (names, relatives) are covered by the same `memory:read:facts` grant as any other fact; there is no per-person rule.
+
 ## Before anything new is connected
 
-Tools, voice, vision and remote access each need a reviewed consent and authorization design first. Phase 2 starts with the `SteelPolicy` permission policy before any tool is registered.
+Tools, voice, vision and remote access each need a reviewed consent and authorization design first. The `SteelPolicy` permission policy now exists; the first tool still needs its own review of what it reads, writes and sends.
 
 Do not publish real data in issues. Report problems with invented examples. No legal compliance, independent audit or certification is claimed.

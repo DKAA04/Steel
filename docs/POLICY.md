@@ -1,6 +1,6 @@
 # SteelPolicy: permission policy for tool calls (design)
 
-Status: **design, written before any code.** This document says what `steel/security/policy.py` and `steel/security/executor.py` must do. A statement here is only "implemented" once a named test proves it; the test table at the end is filled in when the code exists. **No tool is registered in STEEL.**
+Status: **implemented and tested (Phase 2a); no tool is registered in STEEL and no command runs a tool.** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 7 lists the test that proves each rule. A rule with no test there is not claimed.
 
 Sources read in full, at OpenJarvis commit `108d257188cbad85f2e50209d9a61669ea4dec33`: `src/openjarvis/security/capabilities.py`, `src/openjarvis/tools/_stubs.py` (this is where `ToolExecutor` is defined).
 
@@ -125,6 +125,7 @@ A call is allowed only if a grant matches. Each of these is a **deny**:
 | no grant for this capability and resource | `no_grant` |
 | only a wildcard grant exists for a sensor | `wildcard_sensor` |
 | path not allowed by any grant | `path_outside_grants` |
+| `check_path` asked about a capability that is not `fs:read`/`fs:write` | `not_path_capability` |
 | path malformed, relative, contains `..`, or has a NUL/control character | `bad_resource` |
 | `fs:*` asked through `check()` without a verified path | `path_not_checked` |
 | any exception inside the decision code | `error` |
@@ -140,8 +141,8 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 {"agents": [{"agent_id": "room", "grants": [{"capability": "memory:read:notes", "pattern": "*"}], "deny": []}]}
 ```
 
-- **No file = no grants.** A malformed file, a symlink, or a file writable by group/others means **no policy is loaded and every call is denied**. `steel policy show` and `steel doctor` report that state.
-- **Capability field**: an exact vocabulary name, or a family wildcard `memory:*`, or `*`. Wildcards exist so a grant can cover a family, but see 3.3. Legacy names and unknown names are rejected when the file is loaded.
+- **No file = no grants.** A malformed file, a symlink, a file owned by someone else, or a file writable by group/others means **no policy is loaded and every call is denied**. `steel policy show` and `steel doctor` report that state.
+- **Capability field**: an exact vocabulary name, or a family wildcard `memory:*`, or `*`. Wildcards exist so a grant can cover a family, but see 3.3. `sensor:*` and `fs:*` are rejected (they could only mean sensors or paths). Legacy names and unknown names are rejected when the file is loaded.
 - **Pattern for non-path capabilities**: `*` (any tool) or one exact tool name. There is no glob syntax (no `?`, no `[seq]`), so a pattern means what it says. It is matched against `resource`, which `ToolExecutor` fills with the tool name.
 - **Pattern for `fs:read` / `fs:write`**: one absolute directory or file path (not `/`, no `..`). See 3.4.
 - **`deny`**: capability names (exact, family or `*`) that always win over any grant for that agent.
@@ -205,6 +206,7 @@ Every decision, allow or deny, from `check()` and `check_path()`, is appended as
 `steel/security/executor.py::build_executor(tools, *, policy, agent_id, bus=None)` is the **only place STEEL constructs a `ToolExecutor`**. It returns a thin subclass of `ToolExecutor` and refuses to build if:
 
 - `policy` is missing or not a `SteelPolicy` (an OpenJarvis `CapabilityPolicy` is open by default and is refused);
+- the policy has no audit log (no log, no tool calls);
 - `agent_id` fails the id pattern;
 - two tools share a name, or a name is not `[A-Za-z0-9_.-]{1,64}`;
 - a tool's `spec.required_capabilities` is empty, not a list of strings, or contains a name outside the vocabulary or a legacy name;
@@ -222,4 +224,38 @@ Recorded for the owner; the code takes the conservative side of each.
 
 ## 7. Evidence
 
-Filled in with the implementation: each rule above is listed with the test that proves it. Until then nothing in this document is claimed as implemented.
+Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/test_policy_cli.py` (C). All run without a model or network, in temporary directories. The key lines were also mutation-checked: with each of the changes below made by hand, at least one of these tests failed (default allow, no `..` rejection, string-prefix matching, no symlink resolution, wildcard granting sensors, exception treated as allow, audit failure ignored, resource leaked into the log, empty capabilities accepted, no policy accepted, path check skipped, unknown-agent fallback).
+
+| Rule | Test |
+| --- | --- |
+| deny with no grants | P `DenyByDefaultTest.test_deny_with_no_grants_at_all`, `test_deny_for_a_known_agent_with_no_grants` |
+| allow with an exact grant | P `test_allow_with_an_exact_grant`, `test_grant_is_per_capability_and_per_tool` |
+| wrong agent id denied; no `_default` fallback | P `test_deny_for_the_wrong_agent_id`, `test_there_is_no_default_agent_fallback` |
+| explicit deny wins | P `test_explicit_deny_beats_a_grant`, `test_deny_family_wildcard` |
+| unknown or legacy capability denied | P `FailClosedTest.test_unknown_capability_is_denied`, `test_legacy_openjarvis_names_are_denied_and_not_grantable` |
+| bad agent id or resource denied | P `test_bad_agent_ids_are_denied`, `test_malformed_resource_is_denied` |
+| exception inside matching denied | P `test_an_exception_inside_matching_is_a_deny`, `test_a_corrupt_internal_state_is_a_deny_not_a_crash` |
+| wildcard does not grant sensors | P `WildcardAndSensorTest.test_star_never_grants_a_sensor`, `test_a_wildcard_sensor_grant_inserted_behind_the_validation_is_ignored` |
+| sensors need an explicit grant with a tool name | P `test_sensor_needs_its_own_explicit_grant_with_a_tool_name`, `test_sensor_wildcards_cannot_even_be_written` |
+| wildcards do not grant file access | P `test_wildcards_do_not_grant_file_access` |
+| `..`, absolute, relative, NUL paths | P `PathTest.test_paths_with_dot_dot_are_rejected_even_when_they_stay_inside`, `test_absolute_paths_outside_the_grant_are_denied`, `test_relative_home_and_malformed_paths_are_denied` |
+| symlink pointing outside | P `test_symlink_pointing_outside_is_resolved_and_denied`, `test_a_dangling_symlink_to_the_outside_is_denied_for_writing` |
+| sibling prefix (`/a` vs `/ab`) | P `test_sibling_prefix_is_not_a_match` |
+| grant resolved too; grant that means "/" | P `test_the_granted_path_is_resolved_too`, `test_a_grant_that_resolves_to_root_is_refused_or_ignored`, `test_bad_path_grants_are_refused` |
+| `check()` answers `fs:*` only after the executor verified the path | P `test_check_answers_fs_only_after_the_executor_verified_the_path` |
+| every decision logged, five fields | P `AuditLogTest.test_every_decision_is_logged_with_exactly_five_fields` |
+| log has no resource, path or caller text | P `test_log_never_contains_resources_paths_or_caller_text` |
+| log mode 600 | P `test_log_has_mode_600_when_created_and_when_it_already_existed`, `test_log_is_created_private_even_with_a_permissive_umask` |
+| no log, no allow; symlinked log refused | P `test_an_allow_becomes_a_deny_when_the_log_cannot_be_written`, `test_a_symlinked_log_is_refused_not_followed` |
+| policy file validation, symlink or loose mode refused | P `PolicyFileTest` (all five tests) |
+| `wipe` keeps the log; `--include-audit` removes it | C `WipeKeepsPolicyLogTest` |
+| `steel policy show` read-only, shows grants and vocabulary | C `PolicyShowTest` |
+| `steel doctor` reports "policy: deny-by-default active" | C `DoctorPolicyTest` |
+| real `ToolExecutor` denies a call with no grant, allows it with one | E `DenyThroughRealExecutorTest` |
+| `ToolExecutor` calls `check(agent_id, capability, tool_name)` | E `test_the_policy_receives_agent_capability_and_tool_name_in_that_order` |
+| registration without capabilities refused (and the other refusals in section 5) | E `RegistrationRefusalTest` |
+| the stock executor's gaps are real | E `StockExecutorGapsTest` |
+| path arguments checked before a file tool runs | E `PathToolTest` |
+| STEEL names `ToolExecutor` only in `executor.py` | E `OnlyPlaceTest` |
+
+Not tested: concurrency (several threads writing the log), a very large log, behaviour on non-Linux systems, and the time-of-check race on symlinks.
