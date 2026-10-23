@@ -1,0 +1,158 @@
+"""One interface over every store that can hold what the user told STEEL.
+
+Stores STEEL reads and writes:
+  f-  memory_facts.jsonl   facts extracted by the OpenJarvis MemoryService
+  m-  MEMORY.md            OpenJarvis agent memory file (edited by hand today)
+  u-  USER.md              OpenJarvis user profile file (edited by hand today)
+  n-  steel_notes.sqlite3  STEEL's expiring notes (future room observations)
+
+OpenJarvis databases STEEL never writes, but which can hold conversation text
+when other OpenJarvis commands (``jarvis ask/serve/agent``...) run, so
+``wipe`` deletes them too. See SECURITY.md for what each one contains.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+from pathlib import Path
+
+from steel.facts import FACT_PREFIX, SteelFactStore, fact_id
+from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, USER_MD
+from steel.memory_files import MemoryFile
+from steel.notes import MemoryStore
+
+NOTE_PREFIX = "n-"
+
+# OpenJarvis SQLite files that can contain conversation text (pinned commit).
+# name -> what text it can hold.
+OPENJARVIS_CONTENT_DBS = {
+    "traces.db": "raw queries and model results (disabled in config)",
+    "sessions.db": "full chat messages of cross-channel sessions",
+    "agents.db": "managed-agent messages, tasks and checkpoints",
+    "memory.db": "document chunks indexed for retrieval",
+    "audit.db": "security findings; boundary alerts keep an 80-char preview",
+}
+# SQLite side files that may hold recent pages of a database.
+_SQLITE_SIDE_FILES = ("", "-wal", "-shm", "-journal")
+
+
+@dataclass(frozen=True)
+class Entry:
+    """One remembered item, as shown by ``steel memory list``."""
+
+    id: str
+    store: str
+    text: str
+
+
+class SteelMemory:
+    """List, forget and wipe across all memory stores in one home directory."""
+
+    def __init__(self, home: Path, *, max_facts: int = 1000) -> None:
+        self.home = home
+        self.facts = SteelFactStore(home / FACTS_FILE, max_facts=max_facts)
+        self.memory_md = MemoryFile(home / MEMORY_MD, "m-", "# Agent Memory\n\n")
+        self.user_md = MemoryFile(home / USER_MD, "u-", "# User Profile\n\n")
+        self.notes_path = home / NOTES_FILE
+
+    # -- notes helper ----------------------------------------------------
+
+    def _notes(self) -> MemoryStore | None:
+        """Open the notes DB only if it exists, so listing never creates it."""
+        if not self.notes_path.exists():
+            return None
+        return MemoryStore(self.notes_path, allow_persistence=True)
+
+    def notes_store(self) -> MemoryStore:
+        """Open (creating if needed) the notes DB for writing."""
+        return MemoryStore(self.notes_path, allow_persistence=True)
+
+    # -- list / forget / wipe ---------------------------------------------
+
+    def entries(self) -> list[Entry]:
+        """Every entry in every store, each with an id that names its store."""
+        entries = [
+            Entry(fact_id(f.text), f"facts ({f.trust or 'legacy'})", f.text)
+            for f in self.facts.list()
+        ]
+        entries += [Entry(i, "MEMORY.md", t) for i, t in self.memory_md.entries()]
+        entries += [Entry(i, "USER.md", t) for i, t in self.user_md.entries()]
+        notes = self._notes()
+        if notes is not None:
+            with notes:
+                # recall("") returns all unexpired notes (and purges expired ones).
+                entries += [
+                    Entry(NOTE_PREFIX + n["id"], "notes", n["text"])
+                    for n in notes.recall("")
+                ]
+        return entries
+
+    def forget(self, entry_id: str) -> bool:
+        """Delete exactly one entry, chosen by the prefix of its id."""
+        if entry_id.startswith(FACT_PREFIX):
+            return self.facts.forget(entry_id)
+        if entry_id.startswith("m-"):
+            return self.memory_md.forget(entry_id)
+        if entry_id.startswith("u-"):
+            return self.user_md.forget(entry_id)
+        if entry_id.startswith(NOTE_PREFIX):
+            notes = self._notes()
+            if notes is None:
+                return False
+            with notes:
+                return notes.forget(entry_id[len(NOTE_PREFIX) :])
+        return False
+
+    def wipe(self) -> list[str]:
+        """Empty every content store; return the names of what was removed."""
+        removed: list[str] = []
+        # clear() also deletes the forgotten-hash list and the lock file.
+        if self.facts.clear():
+            removed.append(FACTS_FILE)
+        for md in (self.memory_md, self.user_md):
+            if md.wipe():
+                removed.append(md.path.name)
+        # Notes, and every OpenJarvis DB that can hold conversation text.
+        for name in (NOTES_FILE, *OPENJARVIS_CONTENT_DBS):
+            for suffix in _SQLITE_SIDE_FILES:
+                path = self.home / (name + suffix)
+                if path.exists():
+                    path.unlink()
+                    removed.append(path.name)
+        return removed
+
+    # -- audit -------------------------------------------------------------
+
+    def audit(self) -> dict[str, str]:
+        """State of every content store: 'empty', 'absent' or what is left.
+
+        ``steel wipe`` is judged by this: everything must be empty or absent.
+        """
+        report: dict[str, str] = {}
+        n_facts = self.facts.count()
+        report[FACTS_FILE] = f"{n_facts} fact(s)" if n_facts else "empty"
+        n_forgotten = len(self.facts.forgotten_ids())
+        report[self.facts.forgotten_path.name] = (
+            f"{n_forgotten} hash(es)" if n_forgotten else "empty"
+        )
+        for md in (self.memory_md, self.user_md):
+            n = len(md.entries())
+            report[md.path.name] = f"{n} entr(y/ies)" if n else "empty"
+        notes = self._notes()
+        if notes is None:
+            report[NOTES_FILE] = "absent"
+        else:
+            with notes:
+                n = len(notes.recall(""))
+            report[NOTES_FILE] = f"{n} note(s)" if n else "empty"
+        for name in OPENJARVIS_CONTENT_DBS:
+            present = [
+                name + s
+                for s in _SQLITE_SIDE_FILES
+                if (self.home / (name + s)).exists()
+            ]
+            report[name] = "present: " + ", ".join(present) if present else "absent"
+        return report
+
+    def is_empty(self) -> bool:
+        return all(state in ("empty", "absent") for state in self.audit().values())
