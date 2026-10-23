@@ -1,2 +1,0 @@
-# The current offline foundation uses only Python 3.11+ standard-library modules.
-# Future model, voice, vision and API dependencies are intentionally not installed.

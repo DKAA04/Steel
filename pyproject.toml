@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "steel"
+version = "0.2.0"
+description = "STEEL: a personal assistant layer on top of OpenJarvis (Phase 1: user-controlled memory, no tools)."
+readme = "README.md"
+# OpenJarvis at the pinned commit supports Python >=3.10,<3.14.
+requires-python = ">=3.11,<3.14"
+dependencies = [
+    # Pinned to one exact commit. steel/pin.py refuses to run against any other
+    # version, because SteelFactStore relies on LocalFactStore private members.
+    "openjarvis @ git+https://github.com/open-jarvis/OpenJarvis.git@108d257188cbad85f2e50209d9a61669ea4dec33",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8,<10",
+    "ruff>=0.11,<1",
+    "mypy>=1.15,<2",
+]
+
+[project.scripts]
+steel = "steel.cli:main"
+
+[tool.setuptools]
+packages = ["steel"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+# OpenJarvis ships no type stubs for every module; do not fail on them.
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

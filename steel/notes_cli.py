@@ -6,7 +6,7 @@ import argparse
 import json
 from pathlib import Path
 
-from memory.store import MemoryStore
+from steel.notes import MemoryStore
 
 
 def main(argv: list[str] | None = None) -> int:

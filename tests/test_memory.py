@@ -2,8 +2,8 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from core.__main__ import main
-from memory.store import MemoryStore
+from steel.notes import MemoryStore
+from steel.notes_cli import main
 
 
 class MemoryTests(unittest.TestCase):
