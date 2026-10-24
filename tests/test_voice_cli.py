@@ -313,6 +313,10 @@ class ListenCommandTest(CliCase):
         self.assertEqual(self.log_lines()[-1]["decision"], "deny")
 
     def test_ctrl_c_during_a_recording_stops_and_closes_the_microphone(self) -> None:
+        # A process started in the background inherits SIGINT as "ignored", and
+        # then Python installs no Ctrl-C handler; install the normal one here.
+        previous = signal.signal(signal.SIGINT, signal.default_int_handler)
+        self.addCleanup(signal.signal, signal.SIGINT, previous)
         self.allow_everything()
         endless = FakeSource(forever=tone(0.1)[0], screen=self.screen, delay=0.01)
         self.with_tool(open_source=lambda: endless, config=VoiceConfig(max_seconds=120))
