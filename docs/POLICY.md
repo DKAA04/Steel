@@ -124,6 +124,7 @@ A call is allowed only if a grant matches. Each of these is a **deny**:
 | agent has the capability in its `deny` list | `explicit_deny` |
 | no grant for this capability and resource | `no_grant` |
 | path not allowed by any grant | `path_outside_grants` |
+| a path grant no longer resolves to where it resolved when loaded (and no other grant allows the path) | `grant_moved` |
 | `check_path` asked about a capability that is not `fs:read`/`fs:write` | `not_path_capability` |
 | path malformed, relative, contains `..`, or has a NUL/control character | `bad_resource` |
 | `fs:*` asked through `check()` without a verified path | `path_not_checked` |
@@ -166,7 +167,7 @@ To check a path (`SteelPolicy.check_path(agent_id, capability, path)`):
 1. The path must be a string, absolute, without NUL or control characters. Relative paths and `~` are denied (nothing is expanded).
 2. **Any `..` component is rejected outright**, even if it would stay inside the grant.
 3. The path is resolved with `os.path.realpath` **after** that, so every symlink is followed before matching. A not-yet-existing file (a write) is resolved through its existing parent.
-4. The grant path is resolved the same way at check time.
+4. The grant path is resolved **once, when the grant is loaded**, and that resolved path is stored. At check time it is resolved again; if it is not the stored path any more (a directory replaced by a symlink to a wider one, a link retargeted), that grant allows nothing and the reason is `grant_moved`. The match uses the stored path, never the new one. Restart STEEL (reload the file) after you intentionally move a granted directory. Other grants of the same agent still apply.
 5. The match is by path **components**: the resolved path equals the grant or lies under it (`Path.is_relative_to`). Never a string prefix: grant `/home/a` does not match `/home/ab/x`.
 6. A symlink inside a granted directory that points outside is therefore denied.
 
@@ -242,6 +243,7 @@ Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/tes
 | symlink pointing outside | P `test_symlink_pointing_outside_is_resolved_and_denied`, `test_a_dangling_symlink_to_the_outside_is_denied_for_writing` |
 | sibling prefix (`/a` vs `/ab`) | P `test_sibling_prefix_is_not_a_match` |
 | grant resolved too; grant that means "/" | P `test_the_granted_path_is_resolved_too`, `test_a_grant_that_resolves_to_root_is_refused_or_ignored`, `test_bad_path_grants_are_refused` |
+| grant resolved once at load; a moved grant (symlink to a wider directory) grants nothing | P `test_the_grant_is_resolved_once_and_the_resolved_path_is_stored`, `test_a_granted_directory_replaced_by_a_symlink_to_a_wider_one_grants_nothing`, `test_a_grant_whose_directory_vanished_and_came_back_elsewhere_is_denied`, `test_a_moved_grant_does_not_disable_another_unmoved_grant`, `test_a_path_grant_without_a_stored_resolved_path_is_denied` |
 | `check()` answers `fs:*` only after the executor verified the path | P `test_check_answers_fs_only_after_the_executor_verified_the_path` |
 | every decision logged, five fields | P `AuditLogTest.test_every_decision_is_logged_with_exactly_five_fields` |
 | log has no resource, path or caller text | P `test_log_never_contains_resources_paths_or_caller_text` |

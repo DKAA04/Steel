@@ -111,6 +111,8 @@ def _policy_show(home: Path) -> int:
         print(f"  {name}")
         for grant in agent.grants:
             print(f"    grant {grant.capability}  pattern {grant.pattern}")
+            if grant.resolved and grant.resolved != grant.pattern:
+                print(f"          resolved to {grant.resolved}")
         for denied in agent.deny:
             print(f"    deny  {denied}")
         if not agent.grants and not agent.deny:

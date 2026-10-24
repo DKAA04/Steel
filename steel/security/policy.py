@@ -92,6 +92,9 @@ class Grant:
 
     capability: str  # vocabulary name or "memory:read:*"
     pattern: str = "*"  # tool name or "*"; for fs:* an absolute path
+    # fs:* only: where the pattern resolved to when the grant was loaded. check_path
+    # compares against this, so a directory swapped for a symlink later grants nothing.
+    resolved: str = ""
 
 
 @dataclass
@@ -221,15 +224,18 @@ class SteelPolicy:
                 raise PolicyError(
                     f"{capability} needs an absolute path (not '/', no '..')"
                 )
+            # Resolved once, here; check_path compares against it (grant_moved).
+            resolved = str(_resolve(clean))
             pattern = os.path.normpath(clean)
         else:
+            resolved = ""
             if not isinstance(pattern, str) or not (
                 pattern == "*" or valid_tool_name(pattern)
             ):
                 raise PolicyError("pattern must be '*' or one exact tool name")
             if capability in SENSOR_CAPS and pattern == "*":
                 raise PolicyError(f"{capability} needs one exact tool name, not '*'")
-        self._agents[agent_id].grants.append(Grant(capability, pattern))
+        self._agents[agent_id].grants.append(Grant(capability, pattern, resolved))
 
     def deny(self, agent_id: str, capability: str) -> None:
         """Always deny *capability* (or a family, or '*') to an agent."""
@@ -341,15 +347,21 @@ class SteelPolicy:
         if not grants:
             return False, "no_grant"
         real = _resolve(clean)
+        moved = False
         for grant in grants:
-            base = _resolve(grant.pattern)
+            # The grant must still resolve to what it resolved to at load time.
+            # A moved grant allows nothing; it never silently follows the move.
+            base = Path(grant.resolved) if grant.resolved else None
+            if base is None or str(_resolve(grant.pattern)) != grant.resolved:
+                moved = True
+                continue
             if base == ROOT:
-                continue  # a grant (or a symlink in it) that means "everything"
+                continue  # never grants "everything"
             # Compare path components, never string prefixes:
             # "/home/a" must not match "/home/ab".
             if real == base or real.is_relative_to(base):
                 return True, "granted"
-        return False, "path_outside_grants"
+        return False, "grant_moved" if moved else "path_outside_grants"
 
     def _common_problem(self, agent_id: Any, capability: Any) -> str:
         """Reason code if the agent or capability is unusable, else ''."""

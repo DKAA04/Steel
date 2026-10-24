@@ -425,6 +425,61 @@ class PathTest(PolicyCase):
         self.assertFalse(
             self.policy.check_path("room", "fs:write", str(self.root / "a" / "x"))
         )
+        self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
+
+    def test_the_grant_is_resolved_once_and_the_resolved_path_is_stored(self) -> None:
+        link = self.root / "grantlink"
+        link.symlink_to(self.root / "ab")
+        self.policy.grant("room", "fs:write", str(link))
+        stored = {g.pattern: g.resolved for g in self.policy.agents()["room"].grants}
+        self.assertEqual(stored[str(link)], str(self.root / "ab"))
+        self.assertEqual(stored[str(self.root / "a")], str(self.root / "a"))
+
+    def test_a_granted_directory_replaced_by_a_symlink_to_a_wider_one_grants_nothing(
+        self,
+    ) -> None:
+        self.assertTrue(self.read(self.root / "a" / "sub" / "ok.txt"))
+        (self.root / "a").rename(self.root / "a_old")
+        (self.root / "a").symlink_to(self.root)  # now "a" means the whole tree
+        for path in (
+            self.root / "a" / "ab" / "secret.txt",  # reaches a sibling
+            self.root / "ab" / "secret.txt",
+            self.root / "a_old" / "sub" / "ok.txt",
+            self.root / "a" / "a_old" / "sub" / "ok.txt",
+        ):
+            self.assertFalse(self.read(path), path)
+            self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
+
+    def test_a_grant_whose_directory_vanished_and_came_back_elsewhere_is_denied(
+        self,
+    ) -> None:
+        (self.root / "a").rename(self.root / "a_old")
+        (self.root / "a").symlink_to(self.root / "elsewhere")
+        self.assertFalse(self.read(self.root / "a" / "secret.txt"))
+        self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
+
+    def test_a_moved_grant_does_not_disable_another_unmoved_grant(self) -> None:
+        self.policy.grant("room", "fs:read", str(self.root / "elsewhere"))
+        (self.root / "a").rename(self.root / "a_old")
+        (self.root / "a").symlink_to(self.root)
+        self.assertTrue(self.read(self.root / "elsewhere" / "secret.txt"))
+        self.assertFalse(self.read(self.root / "ab" / "secret.txt"))
+        self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
+
+    def test_a_path_grant_without_a_stored_resolved_path_is_denied(self) -> None:
+        # Defence in depth: a grant that skipped grant() has nothing to compare to.
+        self.policy.add_agent("kitchen")
+        self.policy._agents["kitchen"].grants.append(
+            Grant("fs:read", str(self.root / "a"))
+        )
+        self.assertFalse(
+            self.policy.check_path("kitchen", "fs:read", str(self.root / "a" / "sub"))
+        )
+        self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
+
+    def test_an_unmoved_grant_still_allows_after_many_checks(self) -> None:
+        for _ in range(3):
+            self.assertTrue(self.read(self.root / "a" / "sub" / "ok.txt"))
 
     def test_explicit_deny_beats_a_path_grant(self) -> None:
         self.policy.deny("room", "fs:read")
