@@ -568,18 +568,20 @@ class ArgumentTest(ToolCase):
         )
         self.assertFalse(self.call("memory_search_facts", {"query": "x" * 201}).success)
 
-    def test_the_source_argument_must_match_the_tool(self) -> None:
-        ok = self.call("memory_search_facts", {"query": "tea", "source": "facts"})
-        self.assertTrue(ok.success)
-        # A facts grant must not become a way to read notes (or the reverse).
-        for tool, other in (
-            ("memory_search_facts", "notes"),
-            ("memory_search_notes", "facts"),
+    def test_there_is_no_source_argument_at_all(self) -> None:
+        # The tool name is the only switch. Even "source" naming the tool's own
+        # store is refused, so no value can be used to reach the other store.
+        for tool, own, other in (
+            ("memory_search_facts", "facts", "notes"),
+            ("memory_search_notes", "notes", "facts"),
         ):
-            result = self.call(tool, {"query": "tea", "source": other})
-            self.assertFalse(result.success)
-            self.assertIn("reads only", result.content)
-            self.assertNotIn("green tea", result.content)
+            for value in (own, other, "", None):
+                result = self.call(tool, {"query": "tea", "source": value})
+                self.assertFalse(result.success, (tool, value))
+                self.assertIn("Unexpected argument", result.content)
+                self.assertNotIn("green tea", result.content)
+        for spec_tool in get_memory_tools(self.home):
+            self.assertNotIn("source", spec_tool.spec.parameters["properties"])
 
     def test_other_arguments_are_refused(self) -> None:
         for extra in ({"path": "/etc/passwd"}, {"limit": 100}, {"source": "x"}):

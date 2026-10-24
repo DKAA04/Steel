@@ -427,6 +427,16 @@ class PathTest(PolicyCase):
         )
         self.assertEqual(self.last_decision(), ("deny", "grant_moved"))
 
+    def test_a_root_grant_inserted_behind_the_validation_allows_nothing(self) -> None:
+        # grant() refuses "/", so only a grant added some other way can reach the
+        # second guard in check_path. It must still not mean "everything".
+        link = self.root / "rootlink"
+        link.symlink_to("/")
+        self.policy.add_agent("room")
+        self.policy._agents["room"].grants.append(Grant("fs:read", str(link), "/"))
+        self.assertFalse(self.policy.check_path("room", "fs:read", "/etc/passwd"))
+        self.assertEqual(self.last_decision(), ("deny", "path_outside_grants"))
+
     def test_the_grant_is_resolved_once_and_the_resolved_path_is_stored(self) -> None:
         link = self.root / "grantlink"
         link.symlink_to(self.root / "ab")

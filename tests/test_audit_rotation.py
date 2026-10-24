@@ -83,6 +83,27 @@ class RotationTest(RotationCase):
         )
         self.assertEqual(total, 7)
 
+    def test_a_stale_oldest_file_does_not_survive_a_rotation(self) -> None:
+        # .3 exists but .2 does not: shifting alone would leave the stale .3 behind
+        # as if it were newer than what was just rotated.
+        self.numbered(3).write_text("stale\n")
+        self.decide(2)
+        first_two = self.log_path.read_text()
+        self.numbered(1).write_text("one\n")
+        self.decide(1)  # rotates
+        self.assertEqual(self.numbered(2).read_text(), "one\n")
+        self.assertEqual(self.numbered(1).read_text(), first_two)
+        self.assertFalse(self.numbered(3).exists())
+
+    def test_an_empty_log_is_never_rotated(self) -> None:
+        # A line longer than the limit would otherwise push empty files into .1
+        # on every write and throw the real history away.
+        tiny = PolicyAuditLog(self.log_path, max_bytes=10)
+        self.log_path.touch()
+        tiny.write("room", "memory:read:notes", True, "granted")
+        self.assertFalse(self.numbered(1).exists())
+        self.assertEqual(len(self.lines(self.log_path)), 1)
+
     def test_every_file_is_mode_600(self) -> None:
         self.decide(12)
         for path in (self.log_path, *(self.numbered(n) for n in (1, 2, 3))):
@@ -149,6 +170,25 @@ class RotationFailsClosedTest(RotationCase):
         self.assertEqual(target.read_text(), "x" * (TINY + 10))
         self.assertFalse(self.numbered(1).exists())
 
+    def test_the_rotation_check_alone_refuses_a_symlinked_active_log(self) -> None:
+        self.log_path.symlink_to(self.root / "elsewhere.txt")
+        with self.assertRaises(OSError):
+            self.audit._rotate_if_full(10)
+
+    def test_the_open_alone_refuses_a_symlink_planted_after_the_rotation_check(
+        self,
+    ) -> None:
+        # Second layer: even if the check above passed, O_NOFOLLOW stops the write.
+        target = self.root / "elsewhere.txt"
+        target.write_text("untouched")
+        self.log_path.symlink_to(target)
+        with (
+            mock.patch.object(self.audit, "_rotate_if_full"),
+            self.assertRaises(OSError),
+        ):
+            self.audit.write("room", "memory:read:notes", True, "granted")
+        self.assertEqual(target.read_text(), "untouched")
+
     def test_a_symlink_planted_at_a_rotated_name_is_replaced_not_written_through(
         self,
     ) -> None:
@@ -174,6 +214,10 @@ class RotationFilesTest(RotationCase):
             self.audit.rotated_files(),
             [self.numbered(1), self.numbered(2), self.numbered(3)],
         )
+
+    def test_a_dangling_symlink_counts_as_a_rotated_file(self) -> None:
+        self.numbered(2).symlink_to(self.root / "gone.txt")
+        self.assertEqual(self.audit.rotated_files(), [self.numbered(2)])
 
     def test_remove_all_deletes_the_log_and_every_rotated_file(self) -> None:
         self.decide(12)

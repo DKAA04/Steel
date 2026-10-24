@@ -9,6 +9,7 @@ import contextlib
 import io
 import json
 from pathlib import Path
+from unittest import mock
 
 import test_steel as base
 
@@ -227,6 +228,98 @@ class DoctorPolicyTest(PolicyCliCase):
         self.assertEqual(status, 1)
         self.assertIn("policy: INVALID file, everything is denied", out.getvalue())
         self.assertNotIn("deny-by-default active", out.getvalue())
+
+
+class DoctorGrantWarningTest(PolicyCliCase):
+    """Doctor loads the grants file fresh, so within one run a grant cannot have
+    "moved"; it can only be a link or missing. "moved" is for a process that
+    stays alive, and is checked on the policy object below."""
+
+    def doctor_lines(self) -> list[str]:
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            main(["doctor"])
+        return out.getvalue().splitlines()
+
+    def grant_dir(self, path: Path) -> None:
+        self.write_grants(
+            {
+                "agents": [
+                    {
+                        "agent_id": "room",
+                        "grants": [{"capability": "fs:read", "pattern": str(path)}],
+                    }
+                ]
+            }
+        )
+
+    def warnings(self) -> list[str]:
+        return [line for line in self.doctor_lines() if "WARNING" in line]
+
+    def test_a_plain_existing_directory_gives_no_warning(self) -> None:
+        folder = self.home.parent / "docs-dir"
+        folder.mkdir()
+        self.grant_dir(folder)
+        self.assertEqual(self.warnings(), [])
+
+    def test_a_grant_through_a_symbolic_link_is_flagged(self) -> None:
+        real = self.home.parent / "real"
+        real.mkdir()
+        link = self.home.parent / "docs-link"
+        link.symlink_to(real)
+        self.grant_dir(link)
+        (warning,) = self.warnings()
+        self.assertIn("fs:read grant for 'room'", warning)
+        self.assertIn("symbolic link", warning)
+
+    def test_a_grant_on_a_missing_directory_is_flagged(self) -> None:
+        self.grant_dir(self.home.parent / "not-there")
+        (warning,) = self.warnings()
+        self.assertIn("does not exist", warning)
+
+    def test_a_grant_that_moved_in_a_live_policy_is_flagged_as_grant_moved(
+        self,
+    ) -> None:
+        from steel.cli import _policy_lines
+
+        small = self.home.parent / "small"
+        wide = self.home.parent / "wide"
+        small.mkdir()
+        wide.mkdir()
+        link = self.home.parent / "live-link"
+        link.symlink_to(small)
+        policy = SteelPolicy()
+        policy.grant("room", "fs:read", str(link))
+        self.assertEqual([k for *_, k in policy.grant_warnings()], ["link"])
+        link.unlink()
+        link.symlink_to(wide)
+        self.assertEqual([k for *_, k in policy.grant_warnings()], ["moved"])
+        with mock.patch.object(SteelPolicy, "from_file", return_value=policy):
+            ok, lines = _policy_lines(self.home)
+        self.assertTrue(ok)  # a warning does not fail doctor
+        self.assertTrue(any("grant_moved" in line for line in lines))
+        self.assertIn("policy: deny-by-default active", lines)
+
+    def test_non_file_grants_are_never_warned_about(self) -> None:
+        self.write_grants(
+            {
+                "agents": [
+                    {"agent_id": "room", "grants": [{"capability": "memory:read:*"}]}
+                ]
+            }
+        )
+        self.assertEqual(self.warnings(), [])
+
+    def test_the_warning_changes_no_decision(self) -> None:
+        policy = SteelPolicy()
+        real = self.home.parent / "real2"
+        real.mkdir()
+        link = self.home.parent / "link2"
+        link.symlink_to(real)
+        policy.grant("room", "fs:read", str(link))
+        before = policy.check_path("room", "fs:read", str(real / "x"))
+        policy.grant_warnings()
+        self.assertEqual(policy.check_path("room", "fs:read", str(real / "x")), before)
 
 
 class ChatDoesNotTouchThePolicyTest(PolicyCliCase):

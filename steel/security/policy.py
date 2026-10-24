@@ -250,6 +250,32 @@ class SteelPolicy:
             for name, a in self._agents.items()
         }
 
+    def grant_warnings(self) -> list[tuple[str, Grant, str]]:
+        """File grants that deserve a look, as (agent, grant, what is wrong).
+
+        "moved": resolves elsewhere than when it was loaded (the grant allows
+        nothing, reason ``grant_moved``; only a process that stays alive can
+        see this). "link": the path goes through a symbolic link, so moving the
+        link changes what the next load grants. "missing": the path does not exist.
+        Nothing here changes a decision.
+        """
+        found = []
+        for name, agent in self._agents.items():
+            for grant in agent.grants:
+                if grant.capability not in PATH_CAPS:
+                    continue
+                try:
+                    now = str(_resolve(grant.pattern))
+                except (OSError, ValueError):
+                    now = ""
+                if not grant.resolved or now != grant.resolved:
+                    found.append((name, grant, "moved"))
+                elif not os.path.exists(grant.pattern):
+                    found.append((name, grant, "missing"))
+                elif now != grant.pattern:
+                    found.append((name, grant, "link"))
+        return found
+
     @classmethod
     def from_file(
         cls, path: Path, *, audit: PolicyAuditLog | None = None

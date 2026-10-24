@@ -1,6 +1,6 @@
 """memory_search_facts and memory_search_notes: STEEL's first tools (read only).
 
-Two tools, not one with a ``source`` switch, because a tool declares its
+Two tools, not one with a ``source`` argument, because a tool declares its
 capabilities statically: each declares exactly one (``memory:read:facts`` or
 ``memory:read:notes``), so a grant for one cannot read the other store. Both
 share ``search_memory``.
@@ -98,11 +98,6 @@ class _MemorySearch(BaseTool):
                         "maxLength": MAX_QUERY_CHARS,
                         "description": "Words to look for.",
                     },
-                    "source": {
-                        "type": "string",
-                        "enum": [self.source],
-                        "description": f"Optional; only '{self.source}' is allowed.",
-                    },
                 },
                 "required": ["query"],
                 "additionalProperties": False,
@@ -114,11 +109,10 @@ class _MemorySearch(BaseTool):
 
     def execute(self, **params: Any) -> ToolResult:
         # Messages never repeat the query or the offending value.
-        if set(params) - {"query", "source"}:
+        # No "source" argument, not even one that names this tool's own store:
+        # the tool name is the only switch, so a grant cannot be talked around.
+        if set(params) - {"query"}:
             return self._failed("Unexpected argument.")
-        if params.get("source", self.source) != self.source:
-            # "facts" must not be able to read "notes" with only the facts grant.
-            return self._failed(f"This tool reads only {self.source}.")
         query = params.get("query")
         if not isinstance(query, str) or not 1 <= len(query.strip()) <= MAX_QUERY_CHARS:
             return self._failed(f"query must be 1-{MAX_QUERY_CHARS} characters.")

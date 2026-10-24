@@ -87,6 +87,19 @@ def _policy_lines(home: Path) -> tuple[bool, list[str]]:
         "policy: deny-by-default active" if probe_denied else "policy: NOT denying",
         f"policy grants: {grants} in {POLICY_FILE}",
     ]
+    # Warnings, not failures: nothing here makes a decision looser. They say that
+    # a grant may not mean what the file looks like it means.
+    advice = {
+        "moved": "has moved (grant_moved): it allows nothing",
+        "missing": "does not exist: it allows nothing until it does",
+        "link": "goes through a symbolic link (resolved at load): moving the link "
+        "changes what is granted",
+    }
+    for agent_id, grant, kind in policy.grant_warnings():
+        lines.append(
+            f"policy WARNING: {grant.capability} grant for '{agent_id}' on "
+            f"{grant.pattern} {advice[kind]}"
+        )
     return probe_denied, lines
 
 
