@@ -64,6 +64,9 @@ def voice_config(env: Mapping[str, str] | None = None) -> VoiceConfig:
         if all(_LANGUAGE_RE.fullmatch(c) for c in codes):
             languages = codes
     return VoiceConfig(
+        silence_rms=int(
+            _number(env, "STEEL_VOICE_SILENCE_RMS", base.silence_rms, low=0, high=10000)
+        ),
         max_seconds=_number(
             env,
             "STEEL_VOICE_MAX_SECONDS",

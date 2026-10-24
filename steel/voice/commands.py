@@ -69,8 +69,8 @@ def capture_devices(pcm_list: Path = PCM_LIST) -> list[str] | None:
     return found
 
 
-def _directory_size_mb(path: Path) -> int:
-    return round(sum(p.stat().st_size for p in path.iterdir() if p.is_file()) / 1e6)
+def _directory_size_mib(path: Path) -> int:
+    return round(sum(p.stat().st_size for p in path.iterdir() if p.is_file()) / 2**20)
 
 
 def voice_check(home: Path, *, pcm_list: Path = PCM_LIST) -> int:
@@ -102,7 +102,7 @@ def voice_check(home: Path, *, pcm_list: Path = PCM_LIST) -> int:
     directory = model_dir(home, config.model)
     if directory.is_dir():
         print(
-            f"speech model: {config.model}, {_directory_size_mb(directory)} MB "
+            f"speech model: {config.model}, {_directory_size_mib(directory)} MiB "
             f"in {directory}"
         )
     else:

@@ -65,6 +65,7 @@ class MicrophoneListen(BaseTool):
         self._indicator = indicator
         self._cancel = threading.Event()
         self._busy = threading.Lock()
+        self._live: AudioSource | None = None  # the source of a recording in progress
 
     @property
     def spec(self) -> ToolSpec:
@@ -90,8 +91,16 @@ class MicrophoneListen(BaseTool):
         )
 
     def cancel(self) -> None:
-        """Ask a recording in progress to stop (Ctrl-C from the command line)."""
+        """Stop a recording in progress (Ctrl-C from the command line).
+
+        Besides the flag, the source is closed from here: if the device stopped
+        delivering audio, a blocked read would never see the flag, and closing
+        the source is what ends it.
+        """
         self._cancel.set()
+        live = self._live
+        if live is not None:
+            live.close()
 
     def wait_idle(self, timeout: float) -> bool:
         """Wait until no recording is running (after cancel). False on timeout."""
@@ -122,9 +131,10 @@ class MicrophoneListen(BaseTool):
             return self._failed(
                 "No start key was pressed; the microphone stayed closed."
             )
+        source = self._live = self._open_source()
         try:
             recording = record(
-                self._open_source(),
+                source,
                 self._indicator,
                 self._config,
                 stop_requested=self._push_to_talk.stop_pressed,
@@ -134,8 +144,10 @@ class MicrophoneListen(BaseTool):
             return self._failed(f"Not recorded: {exc}.")
         except OSError:
             return self._failed("The microphone could not be opened or read.")
+        finally:
+            self._live = None
         try:
-            if recording.reason == "cancelled":
+            if recording.reason == "cancelled" or self._cancel.is_set():
                 return self._failed("Cancelled.")
             if recording.seconds == 0:
                 return self._failed(

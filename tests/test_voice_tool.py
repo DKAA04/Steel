@@ -353,7 +353,7 @@ class RecordingFlowTest(VoiceCase):
         result = self.listen(tool)
         self.assertFalse(result.success)
         self.assertEqual(result.content, "Cancelled.")
-        self.assertEqual(endless.closed, 1)
+        self.assertGreaterEqual(endless.closed, 1)  # close() is safe to repeat
         self.assertFalse(any(self.transcriber.heard))  # nothing was transcribed
 
     def test_a_cancel_from_an_earlier_call_does_not_cancel_the_next_one(self) -> None:
@@ -362,6 +362,41 @@ class RecordingFlowTest(VoiceCase):
         result = self.listen(tool)
         self.assertTrue(result.success, result.content)
         self.assertEqual(self.opened(), 1)
+
+    def test_cancel_ends_a_recording_whose_device_stopped_delivering_audio(
+        self,
+    ) -> None:
+        # A blocked read never sees the cancel flag; closing the source is what ends it.
+        class Stalled(FakeSource):
+            def __init__(self) -> None:
+                super().__init__(screen=screen)
+                self.unblock = threading.Event()
+
+            def read(self) -> bytes:
+                self.unblock.wait(10)
+                return b""
+
+            def close(self) -> None:
+                super().close()
+                self.unblock.set()
+
+        screen = self.screen
+        stalled = Stalled()
+        tool = self.tool(open_source=lambda: stalled)
+        timer = threading.Timer(0.2, tool.cancel)
+        timer.start()
+        self.addCleanup(timer.cancel)
+        started = time.monotonic()
+        result = self.listen(tool)
+        self.assertLess(time.monotonic() - started, 5)  # not the 10 s of the stall
+        self.assertEqual(result.content, "Cancelled.")
+        self.assertGreaterEqual(stalled.closed, 1)
+
+    def test_cancel_when_nothing_is_recording_is_harmless(self) -> None:
+        tool = self.tool()
+        tool.cancel()
+        tool.cancel()
+        self.assertTrue(tool.wait_idle(0.1))
 
     def test_two_recordings_cannot_run_at_once(self) -> None:
         tool = self.tool()

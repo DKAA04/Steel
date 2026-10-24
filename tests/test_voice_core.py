@@ -60,6 +60,19 @@ class ConfigTest(unittest.TestCase):
             voice_config({"STEEL_VOICE_MAX_SECONDS": "100000"}).max_seconds, 120.0
         )
 
+    def test_the_silence_threshold_is_configurable_within_limits(self) -> None:
+        self.assertEqual(voice_config({}).silence_rms, 500)
+        self.assertEqual(
+            voice_config({"STEEL_VOICE_SILENCE_RMS": "120"}).silence_rms, 120
+        )
+        self.assertEqual(
+            voice_config({"STEEL_VOICE_SILENCE_RMS": "99999999"}).silence_rms, 10000
+        )
+        for bad in ("loud", "-1", "nan", ""):
+            self.assertEqual(
+                voice_config({"STEEL_VOICE_SILENCE_RMS": bad}).silence_rms, 500, bad
+            )
+
     def test_a_bad_number_falls_back_to_the_default(self) -> None:
         for bad in ("abc", "", "nan", "inf", "-5", "0"):
             config = voice_config({"STEEL_VOICE_MAX_SECONDS": bad})

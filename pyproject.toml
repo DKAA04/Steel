@@ -25,8 +25,9 @@ dev = [
 [project.scripts]
 steel = "steel.cli:main"
 
-[tool.setuptools]
-packages = ["steel"]
+# find, not a fixed list: steel.security, steel.tools and steel.voice must be packaged too.
+[tool.setuptools.packages.find]
+include = ["steel*"]
 
 [tool.ruff]
 line-length = 88
