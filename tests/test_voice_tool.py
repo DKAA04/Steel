@@ -398,6 +398,15 @@ class RecordingFlowTest(VoiceCase):
         tool.cancel()
         self.assertTrue(tool.wait_idle(0.1))
 
+    def test_cancel_after_a_finished_recording_does_not_touch_the_old_source(
+        self,
+    ) -> None:
+        tool = self.tool()
+        self.assertTrue(self.listen(tool).success)
+        closed_before = self.sources[0].closed
+        tool.cancel()
+        self.assertEqual(self.sources[0].closed, closed_before)
+
     def test_two_recordings_cannot_run_at_once(self) -> None:
         tool = self.tool()
         self.ptt.hold = threading.Event()
