@@ -12,6 +12,8 @@ steel tool list [--agent ID]      the tools, what each needs, allowed or denied 
 steel tool call NAME --agent ID [--args JSON]   run ONE tool call through the policy (no model)
 steel voice check|consent|revoke|listen   push-to-talk voice input (docs/VOICE.md); check is read-only
 steel chat --voice [--speak]   chat where an empty line means "speak"
+steel vision check|consent|revoke   one-snapshot camera (docs/VISION.md); check is read-only
+steel look ["question"] [--save] [--hours N]   ONE picture, described by the local vision model
 steel notes ...           the original expiring-note commands
 """
 
@@ -143,6 +145,19 @@ def _policy_show(home: Path) -> int:
     for old, new in LEGACY_NAMES.items():
         print(f"  {old:<18} use {new}")
     return 0
+
+
+def _kept_consents(home: Path) -> list[str]:
+    """Lines for ``steel wipe``: the consent files are not memory, so wipe keeps them."""
+    from steel.vision.consent import consent_path as camera_path
+    from steel.voice.consent import consent_path as voice_path
+
+    lines = []
+    if os.path.lexists(camera_path(home)):
+        lines.append("camera consent: kept (withdraw with: steel vision revoke)")
+    if os.path.lexists(voice_path(home)):
+        lines.append("voice consent: kept (withdraw with: steel voice revoke)")
+    return lines
 
 
 def _tool_list(home: Path, agent: str | None) -> int:
@@ -286,6 +301,27 @@ def main(argv: list[str] | None = None) -> int:
         help="check: read-only report; consent / revoke: manage consent; "
         "listen: one push-to-talk capture.",
     )
+    vision = sub.add_parser("vision", help="One-snapshot camera (local only).")
+    vision.add_argument(
+        "action",
+        choices=["check", "consent", "revoke"],
+        help="check: read-only report; consent / revoke: manage camera consent.",
+    )
+    look = sub.add_parser(
+        "look", help="Take ONE picture and describe it with the local vision model."
+    )
+    look.add_argument("question", nargs="?", help="Optional question about the room.")
+    look.add_argument(
+        "--save",
+        action="store_true",
+        help="Offer to keep the description as an expiring room note (you confirm).",
+    )
+    look.add_argument(
+        "--hours",
+        type=float,
+        default=24.0,
+        help="With --save: how long the note lives (default 24, at most 168).",
+    )
     notes = sub.add_parser("notes", help="Original expiring-note commands.")
     notes.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -321,11 +357,20 @@ def main(argv: list[str] | None = None) -> int:
 
         return voice_check(steel_home())  # read only: no harden(), no microphone
 
+    if args.command == "vision" and args.action == "check":
+        from steel.home import steel_home
+        from steel.vision.commands import vision_check
+
+        return vision_check(steel_home())  # read only: no harden(), no camera
+
     if args.command == "chat" and args.speak and not args.voice:
         parser.error("--speak needs --voice.")
 
     if args.command == "wipe" and not args.confirm:
         parser.error("wipe deletes every memory store; add --confirm.")
+
+    if args.command == "look" and args.hours != 24.0 and not args.save:
+        parser.error("--hours needs --save.")
 
     from openjarvis.core.config import load_config
 
@@ -385,6 +430,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Some store is not empty.", file=sys.stderr)
             return 1
         print("All memory stores are empty.")
+        for line in _kept_consents(home):
+            print(line)
     elif args.command == "tool":
         return _tool_call(home, args.name, args.agent, args.args)
     elif args.command == "voice":
@@ -395,6 +442,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "revoke":
             return voice_commands.voice_revoke(home)
         return voice_commands.voice_listen(home)
+    elif args.command == "vision":
+        from steel.vision import commands as vision_commands
+
+        if args.action == "consent":
+            return vision_commands.vision_consent(home)
+        return vision_commands.vision_revoke(home)
+    elif args.command == "look":
+        from steel.vision import commands as vision_commands
+
+        return vision_commands.look(
+            home,
+            args.question,
+            save=args.save,
+            hours=args.hours,
+            memory=memory,
+        )
     elif args.command == "chat" and args.voice:
         from steel.chat import open_session
         from steel.voice import commands as voice_commands

@@ -9,6 +9,7 @@ from pathlib import Path
 from openjarvis.tools._stubs import BaseTool
 
 from steel.memory import SteelMemory
+from steel.tools.camera import CAMERA_TOOL, CameraLook
 from steel.tools.memory_search import MemorySearchFacts, MemorySearchNotes
 from steel.tools.microphone import (
     MICROPHONE_TOOL,
@@ -16,6 +17,10 @@ from steel.tools.microphone import (
     PushToTalk,
     Transcriber,
 )
+from steel.vision.config import VisionConfig, vision_config
+from steel.vision.describe import Describer
+from steel.vision.indicator import CameraIndicator
+from steel.vision.source import FrameSource
 from steel.voice.config import VoiceConfig, voice_config
 from steel.voice.indicator import Indicator
 from steel.voice.source import AudioSource
@@ -72,11 +77,53 @@ def get_microphone_tool(
     )
 
 
+def get_camera_tool(
+    home: Path,
+    *,
+    config: VisionConfig | None = None,
+    open_source: Callable[[], FrameSource] | None = None,
+    describer: Describer | None = None,
+    indicator: CameraIndicator | None = None,
+    ollama_host: str = "",
+) -> CameraLook:
+    """The camera tool, wired to the real terminal, ``ffmpeg`` and a local Ollama.
+
+    Tests pass fakes for every part. Building the tool opens nothing and contacts
+    nothing: the camera is touched only inside ``execute``, after the policy
+    allowed it. *ollama_host* is the OpenJarvis config value (may be empty).
+    """
+    config = config or vision_config()
+    if open_source is None:
+        device, size = config.device, config.capture_size
+        warmup, timeout = config.warmup_frames, config.capture_timeout
+
+        def open_source() -> FrameSource:
+            from steel.vision.camera import FfmpegCameraSource
+
+            return FfmpegCameraSource(device, size, warmup, timeout)
+
+    if describer is None:
+        from steel.vision.describe import OllamaDescriber
+        from steel.vision.describe import ollama_host as resolve_host
+
+        describer = OllamaDescriber(config, resolve_host(ollama_host))
+    return CameraLook(
+        home=home,
+        config=config,
+        open_source=open_source,
+        describer=describer,
+        indicator=indicator or CameraIndicator(),
+    )
+
+
 __all__ = [
+    "CAMERA_TOOL",
     "MICROPHONE_TOOL",
+    "CameraLook",
     "MemorySearchFacts",
     "MemorySearchNotes",
     "MicrophoneListen",
+    "get_camera_tool",
     "get_memory_tools",
     "get_microphone_tool",
 ]

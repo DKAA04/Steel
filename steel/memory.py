@@ -59,6 +59,7 @@ class Entry:
     id: str
     store: str
     text: str
+    source: str = ""  # notes only: user, time_bound or room
 
 
 @dataclass
@@ -115,6 +116,7 @@ class SteelMemory:
                         NOTE_PREFIX + note_id,
                         f"note, {source} (expires {_when(expires)})",
                         text,
+                        source,
                     )
                     for note_id, text, expires, source in notes.entries()
                 ]
@@ -161,6 +163,16 @@ class SteelMemory:
         if not 0 < days <= MAX_REMEMBER_DAYS:
             raise ValueError(f"--days must be above 0 and at most {MAX_REMEMBER_DAYS}.")
         return self.facts.add_note(text, ttl_hours=days * 24)
+
+    def remember_room(self, text: str, *, hours: float) -> str:
+        """Store a camera description as an expiring note with source "room".
+
+        Only ``steel look --save`` calls this, after the owner confirmed the text.
+        Returns the note's entry id. Raises ValueError for blank or over-long text
+        or for hours outside (0, 168].
+        """
+        with self.notes_store() as notes:
+            return NOTE_PREFIX + notes.remember(text, ttl_hours=hours, source="room")
 
     def related(self, entry_id: str) -> list[Entry]:
         """Facts and notes that look related to this one (loose word overlap)."""
