@@ -263,5 +263,6 @@ Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/tes
 | the stock executor's gaps are real | E `StockExecutorGapsTest` |
 | path arguments checked before a file tool runs | E `PathToolTest` |
 | STEEL names `ToolExecutor` only in `executor.py` | E `OnlyPlaceTest` |
+| `ToolExecutor.execute` is the only method that reaches `tool.execute` (also as a bare reference handed to the thread pool); another method added by a future OpenJarvis fails the test | E `NoOtherWayToRunAToolTest` |
 
 Not tested: concurrency (several threads writing the log), a very large log, behaviour on non-Linux systems, and the time-of-check race on symlinks.

@@ -6,9 +6,11 @@ Uses fake harmless tools. No real tool exists in STEEL.
 from __future__ import annotations
 
 import ast
+import inspect
 import json
 import os
 import tempfile
+import textwrap
 import unittest
 from pathlib import Path
 from typing import Any
@@ -344,6 +346,99 @@ class OnlyPlaceTest(unittest.TestCase):
             _executor_names(ast.parse('"""ToolExecutor in a docstring"""'))
         )
         self.assertTrue(issubclass(SteelToolExecutor, ToolExecutor))
+
+
+# Methods the pinned ToolExecutor has that never run a tool. A new method is not
+# on this list, so it fails the test below until someone has read it.
+HARMLESS_TOOL_EXECUTOR_METHODS = frozenset(
+    {
+        "__init__",
+        "begin_session",
+        "available_tools",
+        "get_openai_tools",
+        "_json_safe_metadata",
+    }
+)
+
+
+def _methods_touching_tool_execute(cls: type) -> dict[str, list[int]]:
+    """Method name -> lines where the method uses ``.execute`` or the tool runner.
+
+    A bare ``tool.execute`` counts, not only ``tool.execute(...)``: the stock
+    executor hands the function to a thread pool (``submit(tool.execute, ...)``)
+    and never calls it directly.
+    """
+    tree = ast.parse(textwrap.dedent(inspect.getsource(cls)))
+    found: dict[str, list[int]] = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef):
+            continue
+        lines = [
+            sub.lineno
+            for sub in ast.walk(node)
+            if (isinstance(sub, ast.Attribute) and sub.attr == "execute")
+            or (isinstance(sub, ast.Name) and sub.id == "_TOOL_RUNNER")
+            or (isinstance(sub, ast.Constant) and sub.value == "execute")
+        ]
+        if lines:
+            found[node.name] = lines
+    return found
+
+
+class NoOtherWayToRunAToolTest(unittest.TestCase):
+    """If OpenJarvis adds a second method that runs tools, the policy check in
+    ``execute`` could be bypassed through it. This fails when that happens."""
+
+    def test_only_execute_runs_a_tool(self) -> None:
+        touching = _methods_touching_tool_execute(ToolExecutor)
+        self.assertEqual(
+            sorted(touching),
+            ["execute"],
+            "another ToolExecutor method reaches tool.execute; read it and decide",
+        )
+
+    def test_every_other_method_is_a_known_harmless_one(self) -> None:
+        own = {
+            name
+            for name, member in vars(ToolExecutor).items()
+            if inspect.isfunction(member) or isinstance(member, staticmethod)
+        }
+        unknown = own - HARMLESS_TOOL_EXECUTOR_METHODS - {"execute"}
+        self.assertEqual(unknown, set(), "ToolExecutor has a method nobody reviewed")
+
+    def test_the_scan_sees_each_way_of_reaching_a_tool(self) -> None:
+        # Positive controls: the scan finds a call, a bare reference and a
+        # string lookup, so an empty result is not a blind spot.
+        class Calls:
+            def go(self, tool: BaseTool) -> None:
+                tool.execute()
+
+        class Passes:
+            def go(self, tool: BaseTool, pool: Any) -> None:
+                pool.submit(tool.execute)
+
+        class Looks:
+            def go(self, tool: BaseTool) -> None:
+                getattr(tool, "execute")  # noqa: B009
+
+        class Harmless:
+            def go(self, tool: BaseTool) -> str:
+                return tool.spec.name
+
+        for cls in (Calls, Passes, Looks):
+            self.assertEqual(list(_methods_touching_tool_execute(cls)), ["go"], cls)
+        self.assertEqual(_methods_touching_tool_execute(Harmless), {})
+
+    def test_our_subclass_adds_no_other_way_to_run_a_tool(self) -> None:
+        # SteelToolExecutor reaches the tool only through super().execute.
+        touching = _methods_touching_tool_execute(SteelToolExecutor)
+        self.assertEqual(sorted(touching), ["execute"])
+        public = {
+            name
+            for name in vars(SteelToolExecutor)
+            if not name.startswith("_") and name != "execute"
+        }
+        self.assertEqual(public, set())
 
 
 if __name__ == "__main__":
