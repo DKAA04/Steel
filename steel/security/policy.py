@@ -13,7 +13,8 @@ What changed from the original:
 - Pure Python only; the Rust ``CapabilityPolicy`` that the original's ``check()``
   calls is not used.
 - Capability names must be in a fixed vocabulary; unknown and legacy names are denied.
-- Matching is exact (or ``*`` / ``family:*``) instead of ``fnmatch`` globs. File paths
+- Matching is exact instead of ``fnmatch`` globs. The only wildcard a grant may use
+  is ``memory:read:*``; deny entries may use ``*`` and any ``family:*``. File paths
   are matched on resolved path components, not strings.
 - Sensors are never covered by a wildcard.
 - Every decision is written to a names-only audit log; no log, no allow.
@@ -71,6 +72,9 @@ SENSOR_CAPS = frozenset({"sensor:camera", "sensor:microphone"})
 # Capabilities whose resource is a file path, checked by check_path().
 PATH_CAPS = frozenset({"fs:read", "fs:write"})
 FAMILIES = frozenset(name.split(":")[0] for name in VOCABULARY)
+# The only wildcard a GRANT may use (it covers memory:read:facts and :notes).
+# Everything else needs an exact name; deny entries are looser (denying more is safe).
+GRANT_WILDCARDS = frozenset({"memory:read:*"})
 
 AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 TOOL_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
@@ -86,7 +90,7 @@ class PolicyError(ValueError):
 class Grant:
     """One capability grant for an agent."""
 
-    capability: str  # vocabulary name, "family:*" or "*"
+    capability: str  # vocabulary name or "memory:read:*"
     pattern: str = "*"  # tool name or "*"; for fs:* an absolute path
 
 
@@ -116,10 +120,21 @@ def paths_verified(agent_id: str, capabilities: list[str]) -> Iterator[None]:
 
 
 def _covers(expression: str, capability: str) -> bool:
-    """Does a grant/deny capability expression cover *capability*?"""
+    """Does a deny expression ("*", "family:*", "memory:read:*", exact) cover it?"""
     if expression == capability or expression == "*":
         return True
     return expression.endswith(":*") and capability.startswith(expression[:-1])
+
+
+def _grant_covers(expression: str, capability: str) -> bool:
+    """Does a GRANT cover *capability*? Exact, or the one allowed wildcard.
+
+    Checked again here (not only when loading) so a wildcard that got into the
+    grant list some other way still covers nothing.
+    """
+    if expression == capability:
+        return True
+    return expression in GRANT_WILDCARDS and capability.startswith(expression[:-1])
 
 
 def valid_agent_id(agent_id: object) -> bool:
@@ -161,12 +176,20 @@ def validate_capability_expression(expression: object, *, for_deny: bool) -> str
         raise PolicyError(
             f"'{expression}' is an OpenJarvis name; use {LEGACY_NAMES[expression]}"
         )
-    if expression in VOCABULARY or expression == "*":
+    if expression in VOCABULARY:
+        return expression
+    if not for_deny:
+        if expression in GRANT_WILDCARDS:
+            return expression
+        if expression == "*" or expression.endswith(":*"):
+            # Sensors, paths and the dangerous capabilities need exact names
+            # (POLICY.md 3.3).
+            raise PolicyError(f"'{expression}' cannot be granted by a wildcard")
+        raise PolicyError(f"unknown capability '{expression}'")
+    # Deny entries: denying more is always safe.
+    if expression == "*" or expression in GRANT_WILDCARDS:
         return expression
     if expression.endswith(":*") and expression[:-2] in FAMILIES:
-        if not for_deny and expression[:-2] in ("sensor", "fs"):
-            # Sensors and paths are never granted by a wildcard (POLICY.md 3.3/3.4).
-            raise PolicyError(f"'{expression}' cannot be granted by a wildcard")
         return expression
     raise PolicyError(f"unknown capability '{expression}'")
 
@@ -291,19 +314,14 @@ class SteelPolicy:
             if (agent_id, capability) not in _VERIFIED_PATHS.get():
                 return False, "path_not_checked"
             return True, "granted"
-        skipped_wildcard_sensor = False
         for grant in agent.grants:
-            if not _covers(grant.capability, capability):
+            if not _grant_covers(grant.capability, capability):
                 continue
-            if capability in SENSOR_CAPS:
-                if grant.capability != capability:
-                    skipped_wildcard_sensor = True  # never granted by a wildcard
-                    continue
-                if grant.pattern == "*":
-                    continue  # needs one exact tool name
+            if capability in SENSOR_CAPS and grant.pattern == "*":
+                continue  # a sensor needs one exact tool name
             if grant.pattern == "*" or grant.pattern == resource:
                 return True, "granted"
-        return False, "wildcard_sensor" if skipped_wildcard_sensor else "no_grant"
+        return False, "no_grant"
 
     def _decide_path(
         self, agent_id: Any, capability: Any, path: Any

@@ -97,7 +97,7 @@ Facts are extracted by the small local model `qwen3.5:2b` and it is not perfect.
 
 ### Permission policy (no tools yet)
 
-`steel/security/` holds `SteelPolicy`, a permission policy every future tool call must pass, and `build_executor`, the only place STEEL may construct an OpenJarvis `ToolExecutor`. Everything is denied unless `~/.openjarvis/steel_policy.json` (written by hand, mode 600; absent by default) grants it. Sensors (`sensor:camera`, `sensor:microphone`) can never be granted by a wildcard. Every decision, allow or deny, is appended to `~/.openjarvis/steel_policy_audit.jsonl` (time, agent id, capability, allow/deny, reason code; never paths, arguments or text; mode 600). `steel wipe` keeps that log unless you pass `--include-audit`.
+`steel/security/` holds `SteelPolicy`, a permission policy every future tool call must pass, and `build_executor`, the only place STEEL may construct an OpenJarvis `ToolExecutor`. Everything is denied unless `~/.openjarvis/steel_policy.json` (written by hand, mode 600; absent by default) grants it. The only wildcard a grant may use is `memory:read:*`; a bare `*` makes the grants file invalid. Sensors (`sensor:camera`, `sensor:microphone`) can never be granted by a wildcard. Every decision, allow or deny, is appended to `~/.openjarvis/steel_policy_audit.jsonl` (time, agent id, capability, allow/deny, reason code; never paths, arguments or text; mode 600). `steel wipe` keeps that log unless you pass `--include-audit`.
 
 **What this is not:** it only guards calls that go through a `ToolExecutor` built by `build_executor`. It does not sandbox the process, and a tool's own code can do anything once it runs. Design, rules, limits and the test for each rule: [docs/POLICY.md](docs/POLICY.md).
 

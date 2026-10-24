@@ -91,18 +91,32 @@ class DenyByDefaultTest(PolicyCase):
         self.assertFalse(self.policy.check("room", "memory:read:notes", "t"))
 
     def test_explicit_deny_beats_a_grant(self) -> None:
-        self.policy.grant("room", "*")
-        self.policy.deny("room", "net:outbound")
-        self.assertFalse(self.policy.check("room", "net:outbound", "t"))
+        self.policy.grant("room", "memory:read:*")
+        self.policy.deny("room", "memory:read:facts")
+        self.assertFalse(self.policy.check("room", "memory:read:facts", "t"))
         self.assertEqual(self.last_decision(), ("deny", "explicit_deny"))
-        self.assertTrue(self.policy.check("room", "memory:write", "t"))
+        self.assertTrue(self.policy.check("room", "memory:read:notes", "t"))
 
     def test_deny_family_wildcard(self) -> None:
-        self.policy.grant("room", "*")
+        self.policy.grant("room", "memory:read:facts")
+        self.policy.grant("room", "memory:write")
+        self.policy.grant("room", "shell:exec")
         self.policy.deny("room", "memory:*")
         self.assertFalse(self.policy.check("room", "memory:read:facts", "t"))
         self.assertFalse(self.policy.check("room", "memory:write", "t"))
         self.assertTrue(self.policy.check("room", "shell:exec", "t"))
+
+    def test_deny_entries_may_use_any_wildcard(self) -> None:
+        # Denying more is safe, so deny is looser than grant (POLICY.md 3.3).
+        for expression in ("*", "memory:*", "memory:read:*", "sensor:*", "fs:*"):
+            policy = SteelPolicy()
+            policy.grant("room", "memory:read:facts")
+            policy.deny("room", expression)
+            self.assertEqual(policy.agents()["room"].deny, [expression])
+        policy = SteelPolicy()
+        policy.grant("room", "memory:read:facts")
+        policy.deny("room", "*")
+        self.assertFalse(policy.check("room", "memory:read:facts", "t"))
 
 
 class FailClosedTest(PolicyCase):
@@ -165,18 +179,58 @@ class FailClosedTest(PolicyCase):
 
 
 class WildcardAndSensorTest(PolicyCase):
-    def test_family_wildcard_covers_its_family_only(self) -> None:
-        self.policy.grant("room", "memory:*")
-        for cap in ("memory:read:facts", "memory:read:notes", "memory:write"):
+    def test_the_only_grantable_wildcard_covers_the_memory_read_pair(self) -> None:
+        self.policy.grant("room", "memory:read:*")
+        for cap in ("memory:read:facts", "memory:read:notes"):
             self.assertTrue(self.policy.check("room", cap, "t"), cap)
-        self.assertFalse(self.policy.check("room", "net:outbound", "t"))
+        for cap in ("memory:write", "net:outbound", "shell:exec", "system:admin"):
+            self.assertFalse(self.policy.check("room", cap, "t"), cap)
 
-    def test_star_never_grants_a_sensor(self) -> None:
-        self.policy.grant("room", "*")
-        self.assertTrue(self.policy.check("room", "shell:exec", "t"))  # see POLICY.md
-        for cap in ("sensor:camera", "sensor:microphone"):
-            self.assertFalse(self.policy.check("room", cap, "camera_snapshot"), cap)
-            self.assertEqual(self.last_decision(), ("deny", "wildcard_sensor"))
+    def test_every_other_wildcard_grant_is_refused(self) -> None:
+        for expression in (
+            "*",
+            "memory:*",
+            "memory:write:*",
+            "net:*",
+            "shell:*",
+            "system:*",
+            "channel:*",
+            "schedule:*",
+            "tool:*",
+            "sensor:*",
+            "fs:*",
+            "memory:read:*x",
+            "memory:read*",
+            "*:*",
+        ):
+            with self.assertRaises(PolicyError, msg=expression):
+                self.policy.grant("room", expression)
+        self.assertEqual(self.policy.agents()["room"].grants, [])
+
+    def test_exact_names_are_required_for_the_dangerous_capabilities(self) -> None:
+        for cap in (
+            "shell:exec",
+            "net:outbound",
+            "memory:write",
+            "system:admin",
+            "channel:send",
+            "schedule:create",
+        ):
+            policy = SteelPolicy()
+            policy.grant("room", cap, "one_tool")
+            self.assertTrue(policy.check("room", cap, "one_tool"), cap)
+            self.assertFalse(policy.check("room", cap, "other_tool"), cap)
+
+    def test_a_wildcard_inserted_behind_the_validation_covers_nothing(self) -> None:
+        # Defence in depth: check() itself ignores "*" and the family wildcards.
+        self.policy.add_agent("room")
+        self.policy._agents["room"].grants += [
+            Grant("*", "*"),
+            Grant("memory:*", "*"),
+            Grant("net:*", "*"),
+        ]
+        for cap in VOCABULARY:
+            self.assertFalse(self.policy.check("room", cap, "t"), cap)
 
     def test_sensor_wildcards_cannot_even_be_written(self) -> None:
         for cap, pattern in (
@@ -213,7 +267,7 @@ class WildcardAndSensorTest(PolicyCase):
             self.assertFalse(self.policy.check("room", cap, "camera_snapshot"), cap)
 
     def test_wildcards_do_not_grant_file_access(self) -> None:
-        self.policy.grant("room", "*")
+        self.policy.grant("room", "memory:read:*")
         with self.assertRaises(PolicyError):
             self.policy.grant("room", "fs:*", "/tmp")
         self.assertFalse(self.policy.check_path("room", "fs:read", str(self.root)))
@@ -512,6 +566,20 @@ class PolicyFileTest(PolicyCase):
             {"agents": [{"agent_id": "room", "grants": [{"capability": "file:read"}]}]},
             {"agents": [{"agent_id": "room", "grants": [{"capability": "nonsense"}]}]},
             {"agents": [{"agent_id": "room", "grants": [{"capability": "sensor:*"}]}]},
+            # A bare "*" (or a family wildcard) makes the whole file invalid.
+            {"agents": [{"agent_id": "room", "grants": [{"capability": "*"}]}]},
+            {"agents": [{"agent_id": "room", "grants": [{"capability": "memory:*"}]}]},
+            {
+                "agents": [
+                    {
+                        "agent_id": "room",
+                        "grants": [
+                            {"capability": "memory:read:facts"},
+                            {"capability": "*", "pattern": "cli"},
+                        ],
+                    }
+                ]
+            },
             {
                 "agents": [
                     {"agent_id": "room", "grants": [{"capability": "sensor:camera"}]}

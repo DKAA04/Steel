@@ -123,7 +123,6 @@ A call is allowed only if a grant matches. Each of these is a **deny**:
 | resource empty, not a string, or not a valid tool name `[A-Za-z0-9_.-]{1,64}` | `bad_resource` |
 | agent has the capability in its `deny` list | `explicit_deny` |
 | no grant for this capability and resource | `no_grant` |
-| only a wildcard grant exists for a sensor | `wildcard_sensor` |
 | path not allowed by any grant | `path_outside_grants` |
 | `check_path` asked about a capability that is not `fs:read`/`fs:write` | `not_path_capability` |
 | path malformed, relative, contains `..`, or has a NUL/control character | `bad_resource` |
@@ -142,25 +141,25 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 ```
 
 - **No file = no grants.** A malformed file, a symlink, a file owned by someone else, or a file writable by group/others means **no policy is loaded and every call is denied**. `steel policy show` and `steel doctor` report that state.
-- **Capability field**: an exact vocabulary name, or a family wildcard `memory:*`, or `*`. Wildcards exist so a grant can cover a family, but see 3.3. `sensor:*` and `fs:*` are rejected (they could only mean sensors or paths). Legacy names and unknown names are rejected when the file is loaded.
+- **Capability field**: an exact vocabulary name, or the **one** allowed wildcard `memory:read:*` (it covers `memory:read:facts` and `memory:read:notes`, nothing else). Every other wildcard (`*`, `memory:*`, `net:*`, `sensor:*`, `fs:*` ...) makes the **whole file invalid**. `shell:exec`, `net:outbound`, `memory:write`, `system:admin`, `channel:send` and `schedule:create` therefore always need their exact name. Legacy names and unknown names are rejected too. `check()` repeats this rule, so a wildcard that got into the grant list by some other route covers nothing.
 - **Pattern for non-path capabilities**: `*` (any tool) or one exact tool name. There is no glob syntax (no `?`, no `[seq]`), so a pattern means what it says. It is matched against `resource`, which `ToolExecutor` fills with the tool name.
 - **Pattern for `fs:read` / `fs:write`**: one absolute directory or file path (not `/`, no `..`). See 3.4.
-- **`deny`**: capability names (exact, family or `*`) that always win over any grant for that agent.
+- **`deny`**: capability names (exact, `memory:read:*`, any `family:*`, or a bare `*`) that always win over any grant for that agent. Deny entries may use every wildcard because denying more is safe.
 - Grants are **per agent id**; there is no `_default` agent and no inheritance.
 
 ### 3.3 Sensors
 
-`sensor:camera` and `sensor:microphone` are never covered by a wildcard capability (`*`, `sensor:*`), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
+`sensor:camera` and `sensor:microphone` can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
 
 ```json
 {"capability": "sensor:camera", "pattern": "camera_snapshot"}
 ```
 
-`sensor:*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). A bare `*` grant loads, but simply does not cover sensors; `check()` skips wildcard grants for sensors even if one were added in code (defence in depth), and the decision is `wildcard_sensor` when that was the only grant.
+`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused).
 
 ### 3.4 Paths (`fs:read`, `fs:write`)
 
-Wildcard capability grants (`*`, `fs:*`) never cover path capabilities, because a wildcard has no path to match: each path grant names `fs:read` or `fs:write` exactly, with an absolute path.
+No wildcard grant covers path capabilities, because a wildcard has no path to match: each path grant names `fs:read` or `fs:write` exactly, with an absolute path.
 
 To check a path (`SteelPolicy.check_path(agent_id, capability, path)`):
 
@@ -218,7 +217,7 @@ The subclass overrides `execute`: for tools with path capabilities it parses the
 
 Recorded for the owner; the code takes the conservative side of each.
 
-1. A bare `*` grant covers `shell:exec`, `net:outbound`, `memory:write` and `system:admin` (but never sensors or paths). Should wildcards be limited to one family (`memory:*`)?
+1. *Decided in Phase 2b:* grants may use only `memory:read:*`; a bare `*` invalidates the file (3.2).
 2. Legacy OpenJarvis names are denied rather than aliased. Is that the wanted behaviour?
 3. The audit log is not rotated.
 
@@ -231,11 +230,12 @@ Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/tes
 | deny with no grants | P `DenyByDefaultTest.test_deny_with_no_grants_at_all`, `test_deny_for_a_known_agent_with_no_grants` |
 | allow with an exact grant | P `test_allow_with_an_exact_grant`, `test_grant_is_per_capability_and_per_tool` |
 | wrong agent id denied; no `_default` fallback | P `test_deny_for_the_wrong_agent_id`, `test_there_is_no_default_agent_fallback` |
-| explicit deny wins | P `test_explicit_deny_beats_a_grant`, `test_deny_family_wildcard` |
+| explicit deny wins; deny may use any wildcard | P `test_explicit_deny_beats_a_grant`, `test_deny_family_wildcard`, `test_deny_entries_may_use_any_wildcard` |
 | unknown or legacy capability denied | P `FailClosedTest.test_unknown_capability_is_denied`, `test_legacy_openjarvis_names_are_denied_and_not_grantable` |
 | bad agent id or resource denied | P `test_bad_agent_ids_are_denied`, `test_malformed_resource_is_denied` |
 | exception inside matching denied | P `test_an_exception_inside_matching_is_a_deny`, `test_a_corrupt_internal_state_is_a_deny_not_a_crash` |
-| wildcard does not grant sensors | P `WildcardAndSensorTest.test_star_never_grants_a_sensor`, `test_a_wildcard_sensor_grant_inserted_behind_the_validation_is_ignored` |
+| the only grantable wildcard is `memory:read:*`; bare `*` and every other wildcard refused, also in a file | P `WildcardAndSensorTest.test_the_only_grantable_wildcard_covers_the_memory_read_pair`, `test_every_other_wildcard_grant_is_refused`, `test_exact_names_are_required_for_the_dangerous_capabilities`, `PolicyFileTest.test_invalid_files_are_refused_with_no_partial_policy` |
+| a wildcard inserted behind the validation covers nothing; sensors never covered | P `test_a_wildcard_inserted_behind_the_validation_covers_nothing`, `test_a_wildcard_sensor_grant_inserted_behind_the_validation_is_ignored` |
 | sensors need an explicit grant with a tool name | P `test_sensor_needs_its_own_explicit_grant_with_a_tool_name`, `test_sensor_wildcards_cannot_even_be_written` |
 | wildcards do not grant file access | P `test_wildcards_do_not_grant_file_access` |
 | `..`, absolute, relative, NUL paths | P `PathTest.test_paths_with_dot_dot_are_rejected_even_when_they_stay_inside`, `test_absolute_paths_outside_the_grant_are_denied`, `test_relative_home_and_malformed_paths_are_denied` |
