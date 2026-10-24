@@ -6,6 +6,7 @@
 4. Done (Phase 2a): `SteelPolicy`, `build_executor`, the names-only decision log, `steel policy show`; designed (docs/POLICY.md) and tested **before** any tool existed.
 4b. Done (Phase 2b): policy hardening (one grantable wildcard, `grant_moved`, log rotation, a test that `ToolExecutor.execute` is the only way to run a tool) and the first tools, `memory_search_facts` and `memory_search_notes` (read only), run from `steel tool call` with no model. Open: legacy names (POLICY.md section 6); per-person handling of memory, now that a tool can read facts (docs/MEMORY_QUALITY.md); whether the chat model may ever call a tool (needs a prompt-injection review first).
 5. Voice and vision: define consent, visible recording indicators and retention before attaching sensors. Room observations build on the expiring note store.
+5a. Phase 2c (voice, push-to-talk only; no wake word, no always-on listening): the design is written first in docs/VOICE.md; implementation follows it and is marked done here only with named tests.
 6. Mobile/API: authentication and authorization must come before any remote command interface.
 
 These are planned milestones with no promised dates. The security module will be limited to owned or explicitly authorized environments.
