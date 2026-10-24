@@ -8,6 +8,8 @@ steel remember TEXT [--days N]    store a trusted fact, or an expiring note (N <
 steel forget ID [--with-related]  delete one entry (and optionally its neighbours)
 steel wipe --confirm [--include-audit]   empty every memory store (the policy log is kept unless --include-audit)
 steel policy show         read-only: permission grants and the capability list
+steel tool list [--agent ID]      the tools, what each needs, allowed or denied (read-only)
+steel tool call NAME --agent ID [--args JSON]   run ONE tool call through the policy (no model)
 steel notes ...           the original expiring-note commands
 """
 
@@ -128,6 +130,84 @@ def _policy_show(home: Path) -> int:
     return 0
 
 
+def _tool_list(home: Path, agent: str | None) -> int:
+    """``steel tool list``: tools, needed capabilities, and what the grants allow.
+
+    Read only. The policy is loaded without an audit log, so this cannot write
+    one: asking is not a tool call.
+    """
+    from steel.home import POLICY_FILE
+    from steel.security.policy import PolicyError, SteelPolicy
+    from steel.tools import get_memory_tools
+
+    try:
+        policy = SteelPolicy.from_file(home / POLICY_FILE)
+    except PolicyError as exc:
+        print(f"Policy file {home / POLICY_FILE}: INVALID ({exc}).")
+        print("Nothing is loaded, so every tool call is denied.")
+        policy = SteelPolicy()
+    agents = [agent] if agent else list(policy.agents())
+    if not agents:
+        print("No agents in the grants file: every call is denied.")
+    for tool in get_memory_tools(home):
+        spec = tool.spec
+        print(spec.name)
+        print(f"  needs: {', '.join(spec.required_capabilities)}")
+        print(f"  {spec.description}")
+        for name in agents:
+            verdicts = [
+                policy.preview(name, cap, spec.name)
+                for cap in spec.required_capabilities
+            ]
+            failed = next((reason for ok, reason in verdicts if not ok), "")
+            print(f"  agent {name}: " + (f"denied ({failed})" if failed else "allowed"))
+    return 0
+
+
+def _tool_call(home: Path, name: str, agent_id: str, arguments: str) -> int:
+    """``steel tool call``: one call through build_executor. No model is involved.
+
+    The decision is written to the audit log (names only, never the arguments
+    or the result). An invalid grants file means an empty policy: the call is
+    denied, and the denial is logged.
+    """
+    from openjarvis.core.types import ToolCall
+
+    from steel.home import POLICY_AUDIT_FILE
+    from steel.security import (
+        PolicyAuditLog,
+        PolicyError,
+        SteelPolicy,
+        load_home_policy,
+    )
+    from steel.security.executor import build_executor
+    from steel.tools import get_memory_tools
+
+    tools = get_memory_tools(home)
+    if name not in {tool.spec.name for tool in tools}:
+        known = ", ".join(tool.spec.name for tool in tools)
+        print(f"steel: unknown tool '{name}'. Tools: {known}", file=sys.stderr)
+        return 2
+    try:
+        policy = load_home_policy(home)
+    except PolicyError as exc:
+        print(
+            f"steel: grants file invalid ({exc}); nothing is granted.", file=sys.stderr
+        )
+        policy = SteelPolicy(audit=PolicyAuditLog(home / POLICY_AUDIT_FILE))
+    try:
+        executor = build_executor(tools, policy=policy, agent_id=agent_id)
+    except PolicyError as exc:
+        print(f"steel: {exc}", file=sys.stderr)
+        return 2
+    result = executor.execute(ToolCall(id="cli", name=name, arguments=arguments))
+    if result.success:
+        print(result.content)
+        return 0
+    print(f"Not run: {result.content}", file=sys.stderr)
+    return 1
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog="steel",
@@ -164,6 +244,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     pol = sub.add_parser("policy", help="Inspect the permission policy (read only).")
     pol.add_argument("action", choices=["show"])
+    tool = sub.add_parser("tool", help="List or run tools through the policy.")
+    tool_sub = tool.add_subparsers(dest="tool_action", required=True)
+    tool_list = tool_sub.add_parser("list", help="Tools and what the grants allow.")
+    tool_list.add_argument("--agent", help="Show one agent id instead of the file's.")
+    tool_call = tool_sub.add_parser("call", help="Run one tool call, no model.")
+    tool_call.add_argument("name")
+    tool_call.add_argument("--agent", required=True, help="Agent id the grants name.")
+    tool_call.add_argument(
+        "--args", default="{}", help='JSON object, e.g. \'{"query": "tea"}\''
+    )
     notes = sub.add_parser("notes", help="Original expiring-note commands.")
     notes.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -187,6 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         from steel.home import steel_home
 
         return _policy_show(steel_home())
+
+    if args.command == "tool" and args.tool_action == "list":
+        from steel.home import steel_home
+
+        return _tool_list(steel_home(), args.agent)
 
     if args.command == "wipe" and not args.confirm:
         parser.error("wipe deletes every memory store; add --confirm.")
@@ -249,6 +344,8 @@ def main(argv: list[str] | None = None) -> int:
             print("Some store is not empty.", file=sys.stderr)
             return 1
         print("All memory stores are empty.")
+    elif args.command == "tool":
+        return _tool_call(home, args.name, args.agent, args.args)
     elif args.command == "chat":
         from steel.chat import open_session, run_repl
 

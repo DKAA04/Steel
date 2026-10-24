@@ -92,6 +92,20 @@ class Signature:
         )
 
 
+def entry_words(text: str) -> frozenset[str]:
+    """Every word of *text*, accent-free and stemmed, for searching."""
+    return frozenset(_stem(w) for w in _words(text))
+
+
+def query_words(query: str) -> frozenset[str]:
+    """The words of a search query that carry content.
+
+    Filler words ("the", "el") are dropped; a query made only of filler keeps
+    all its words, so it can still match something.
+    """
+    return Signature(query).content or entry_words(query)
+
+
 def _fraction_of(a: Signature, b: Signature) -> float:
     """Share of a's content words that also appear in b."""
     return len(a.content & b.content) / len(a.content) if a.content else 0.0

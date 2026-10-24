@@ -8,7 +8,7 @@ silently (docs/POLICY.md section 1):
 - a file tool without declared path arguments (the executor only sees the
   tool's name, never the path it is about to open).
 
-No tool is registered anywhere in STEEL yet.
+STEEL's tools (steel/tools) run only through here; none is registered with OpenJarvis.
 """
 
 from __future__ import annotations

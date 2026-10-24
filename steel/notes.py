@@ -127,3 +127,26 @@ class MemoryStore:
 
     def __exit__(self, *args: object) -> None:
         self.close()
+
+
+def read_unexpired(path: Path, *, now: float | None = None) -> list[tuple[str, str]]:
+    """(id, text) of the unexpired notes in *path*, oldest first. Writes nothing.
+
+    ``MemoryStore`` deletes expired rows and may add a column when it opens a
+    database, so a read-only caller must not use it. This opens the file
+    read-only (SQLite refuses any write on the connection) and skips expired
+    rows instead of deleting them. A missing file has no notes.
+    """
+    if path.is_symlink():
+        raise ValueError("Use a regular database path, not a symbolic link.")
+    if not path.exists():
+        return []
+    db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
+    try:
+        rows = db.execute(
+            "SELECT id, text FROM notes WHERE expires > ? ORDER BY rowid",
+            (time.time() if now is None else now,),
+        ).fetchall()
+    finally:
+        db.close()
+    return [(note_id, text) for note_id, text in rows]

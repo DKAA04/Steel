@@ -26,7 +26,7 @@ from steel.facts import (
 )
 from steel.home import FACTS_FILE, MEMORY_MD, NOTES_FILE, POLICY_AUDIT_FILE, USER_MD
 from steel.memory_files import MemoryFile
-from steel.notes import MemoryStore
+from steel.notes import MemoryStore, read_unexpired
 from steel.security.audit import PolicyAuditLog
 from steel.similarity import is_related
 
@@ -119,6 +119,33 @@ class SteelMemory:
                     for note_id, text, expires, source in notes.entries()
                 ]
         return entries
+
+    def readable(self, source: str) -> list[Entry]:
+        """Entries a read-only tool may see. Writes nothing, not even a purge.
+
+        ``source`` is "facts" or "notes" (anything else raises ValueError):
+
+        - facts: the durable facts in memory_facts.jsonl that are fit for recall
+          (quarantined ones are left out, as in chat), minus any whose text is on
+          the forgotten list. MEMORY.md and USER.md are not included.
+        - notes: unexpired notes of every source. Expired ones are skipped, not
+          deleted. An unreadable database raises OSError/sqlite3.Error.
+        """
+        if source == "facts":
+            forgotten = self.facts.forgotten_ids()
+            return [
+                Entry(fact_id(f.text), "facts", f.text)
+                for f in self.facts.list()
+                if f.trusted_for_recall and fact_id(f.text) not in forgotten
+            ]
+        if source == "notes":
+            forgotten = self.facts.forgotten_ids()
+            return [
+                Entry(NOTE_PREFIX + note_id, "notes", text)
+                for note_id, text in read_unexpired(self.notes_path)
+                if fact_id(text) not in forgotten
+            ]
+        raise ValueError("source must be 'facts' or 'notes'")
 
     def remember(self, text: str, *, days: float | None = None) -> AddResult:
         """``steel remember``: a trusted durable fact, or an expiring note.

@@ -292,6 +292,19 @@ class SteelPolicy:
             allowed, reason = False, "error"
         return self._record(agent_id, capability, allowed, reason)
 
+    def preview(
+        self, agent_id: str, capability: str, resource: str
+    ) -> tuple[bool, str]:
+        """What check() would answer, with the reason code, without logging it.
+
+        For ``steel tool list``: asking "would this be allowed?" is not a tool
+        call, so it leaves no audit line.
+        """
+        try:
+            return self._decide(agent_id, capability, resource)
+        except Exception:  # noqa: BLE001 - fail closed on any bug
+            return False, "error"
+
     def check_path(self, agent_id: str, capability: str, path: object) -> bool:
         """May *agent_id* use *capability* (fs:read / fs:write) on *path*?"""
         try:
