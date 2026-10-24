@@ -104,6 +104,13 @@ class ConsentTest(TempDirCase):
         self.assertEqual(json.loads(path.read_text()), {"consented_at": stamp})
         self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
 
+    def test_an_existing_wide_open_file_becomes_private_again(self) -> None:
+        path = consent_path(self.dir)
+        path.write_text("old")
+        path.chmod(0o644)
+        record_consent(self.dir)
+        self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
     def test_revoking_deletes_the_file(self) -> None:
         record_consent(self.dir)
         self.assertTrue(revoke_consent(self.dir))
@@ -304,6 +311,28 @@ class RecorderTest(unittest.TestCase):
             record(source, self.indicator, VoiceConfig())
         self.assertEqual(source.closed, 1)
         self.assertIn("microphone closed", self.screen.getvalue())
+
+    def test_audio_already_recorded_is_wiped_when_reading_fails_midway(self) -> None:
+        class Breaks(FakeSource):
+            def read(self) -> bytes:
+                if not self.chunks:
+                    raise OSError("device gone")
+                return super().read()
+
+        seen: dict[str, bytes] = {}
+
+        def spy(buffer: bytearray) -> None:
+            seen["before"] = bytes(buffer)
+            wipe(buffer)
+            seen["after"] = bytes(buffer)
+
+        with (
+            mock.patch("steel.voice.recorder.wipe", side_effect=spy),
+            self.assertRaises(OSError),
+        ):
+            record(Breaks(tone(0.5)), self.indicator, VoiceConfig())
+        self.assertTrue(any(seen["before"]))  # there was audio to lose
+        self.assertFalse(any(seen["after"]))  # and it was zeroed before raising
 
     def test_a_source_that_fails_to_open_is_reported_and_not_read(self) -> None:
         class Refuses(FakeSource):

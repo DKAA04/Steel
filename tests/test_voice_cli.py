@@ -140,6 +140,16 @@ class VoiceCheckTest(CliCase):
         self.assertEqual(self.snapshot(), before)
         self.assertFalse((self.home / LOG).exists())
 
+    def test_check_changes_no_permissions_and_creates_nothing(self) -> None:
+        # Unlike the commands that write, it must not run harden() on the home.
+        self.home.chmod(0o755)
+        (self.home / "USER.md").chmod(0o644)
+        before = {p.name for p in self.home.iterdir()}
+        self.run_cli("voice", "check", expect=1)
+        self.assertEqual(self.home.stat().st_mode & 0o777, 0o755)
+        self.assertEqual((self.home / "USER.md").stat().st_mode & 0o777, 0o644)
+        self.assertEqual({p.name for p in self.home.iterdir()}, before)
+
     def test_everything_in_place_is_ready(self) -> None:
         self.allow_everything()
         with self.ready_world():

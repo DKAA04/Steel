@@ -356,6 +356,13 @@ class RecordingFlowTest(VoiceCase):
         self.assertEqual(endless.closed, 1)
         self.assertFalse(any(self.transcriber.heard))  # nothing was transcribed
 
+    def test_a_cancel_from_an_earlier_call_does_not_cancel_the_next_one(self) -> None:
+        tool = self.tool()
+        tool.cancel()  # e.g. a Ctrl-C that arrived after the last recording ended
+        result = self.listen(tool)
+        self.assertTrue(result.success, result.content)
+        self.assertEqual(self.opened(), 1)
+
     def test_two_recordings_cannot_run_at_once(self) -> None:
         tool = self.tool()
         self.ptt.hold = threading.Event()
