@@ -1,6 +1,6 @@
 # Security and privacy boundaries
 
-STEEL is an early personal prototype for one trusted local user. It has **persistent memory**. The chat model has **no tools**. Two read-only memory-search tools exist behind a deny-by-default permission policy (Phases 2a and 2b, [docs/POLICY.md](docs/POLICY.md)); only the owner can run them, from the command line (`steel tool call`), and no model is involved in that path. It has no microphone or camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
+STEEL is an early personal prototype for one trusted local user. It has **persistent memory**. The chat model has **no tools**. Two read-only memory-search tools and one microphone tool exist behind a deny-by-default permission policy (Phases 2a to 2c, [docs/POLICY.md](docs/POLICY.md)); only the owner can run them, from the command line, and no model is involved in that path. **Voice input (Phase 2c) is optional and off until the owner gives consent and writes a grant by hand**; it is push-to-talk only, fully local, and never listens in the background (details and limits below and in [docs/VOICE.md](docs/VOICE.md)). It has no camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
 
 ## What is stored, and where
 
@@ -15,6 +15,8 @@ Everything lives under the OpenJarvis home (`~/.openjarvis`, or `$OPENJARVIS_HOM
 | `steel_notes.sqlite3` | Expiring notes, each labelled with a source (`user`: `steel remember --days`, `steel notes`; `time_bound`: extracted from your messages; `room`: reserved, nothing writes it) | Yes (time-bound facts) | Yes |
 | `steel_policy.json` | Permission grants you wrote by hand. Absent by default (= nothing is granted) | No (never written by STEEL) | **No** |
 | `steel_policy_audit.jsonl` | Permission decisions: time, agent id, capability, allow/deny, reason code. No paths, tool arguments or text | No (nothing calls the policy yet; `steel doctor` and `steel policy show` only read) | **No, unless `steel wipe --confirm --include-audit`** |
+| `steel_voice_consent.json` | When you agreed to voice input: one timestamp, nothing else. Delete it (or `steel voice revoke`) to withdraw. Absent by default (= no microphone) | No (only `steel voice consent`) | **No** |
+| `steel_models/` (a directory) | Speech models you fetched by hand (about 600 MiB). Never written by STEEL | No | **No** |
 | `audit.db` | Security findings: pattern names (e.g. "email") and timestamps; boundary-guard alerts keep an **80-character preview** of the text | Yes (pattern names only; tested) | Yes |
 | `traces.db` | Raw queries and model results | No; disabled in config | Yes |
 | `sessions.db` | Full chat messages of cross-channel sessions | No | Yes |
@@ -51,7 +53,7 @@ Wiping `audit.db` also deletes its tamper-evident security history. This is deli
 Full list in [docs/POLICY.md](docs/POLICY.md) section 4. In short:
 
 - **It is not a sandbox.** It decides only for calls made through the `ToolExecutor` that `build_executor` returns. Code running in the STEEL process can ignore it. Tools are trusted code.
-- **Only two tools exist** (`memory_search_facts`, `memory_search_notes`), both read-only and both tested. The path and shell/network rules have still only been tested with fake tools.
+- **Only three tools exist** (`memory_search_facts`, `memory_search_notes`, `microphone_listen`). The first two are read-only; the third reads the microphone. The path and shell/network rules have still only been tested with fake tools.
 - **File rules cover declared path arguments only** and are checked at one moment (a symlink swapped later is not caught). Other capabilities (`net:outbound`, `shell:exec`, memory) are all-or-nothing per tool: they do not limit hosts, commands or which memory entries.
 - **The grants file is yours.** Whoever can write `steel_policy.json` can grant anything. STEEL refuses it only if it is a symlink, owned by someone else, or writable by group/others. A broken file means nothing is granted.
 - **Wildcards are nearly gone.** A grant may use only `memory:read:*`; a bare `*` or any other wildcard makes the whole grants file invalid (everything is then denied). `shell:exec`, `net:outbound`, `memory:write` and the rest need their exact name. `deny` entries may still use wildcards.
@@ -62,8 +64,22 @@ Full list in [docs/POLICY.md](docs/POLICY.md) section 4. In short:
 - **`steel tool call` prints the result to your terminal** (and so to your terminal scrollback). The decision log never holds the query or the result.
 - **Arguments and results reach the OpenJarvis event bus** when an executor is given one. `steel tool call` gives it none, and STEEL subscribes nothing that stores them.
 
+## Voice input limits
+
+Full list in [docs/VOICE.md](docs/VOICE.md) section 8.
+
+- **Third parties are recorded.** Anyone speaking near the microphone while it is open is recorded and transcribed; nothing identifies whose voice it is. What limits this is the push-to-talk design (short, deliberate recordings, a visible `● REC` line, never in the background), not any technical protection of bystanders. A bystander's words can end up in the transcript and, if you confirm it, in the model prompt and the fact store.
+- **Consent is a local file and the grant is a local file.** Whoever can write your OpenJarvis folder can create both. STEEL refuses a consent file that is a symlink, not yours, or writable by others. The REC-line proof stops mistakes, not code running inside STEEL's own process: this is not a sandbox.
+- **No wake word and no always-on listening exist.** A wake word is documented as NOT IMPLEMENTED with its risks (always-on microphone, false triggers, bystanders).
+- **Audio is held in RAM only and zeroed after use (best effort).** No audio file or temporary file is written by STEEL or by `faster-whisper` when given an array. Python can leave copies in memory and the operating system can swap RAM to disk. Another program can record from the same microphone at the same time (PipeWire allows several clients); the REC line shows only STEEL's own recording.
+- **Nothing is sent to the network.** Speech is recognised locally with `faster-whisper`; the model is loaded only from a directory that already exists, so it cannot be downloaded at run time. STEEL does not import `openjarvis.speech`, whose discovery can choose OpenAI or Deepgram when an API key is in the environment. `steel voice check` mentions such a key but never prints it.
+- **Transcripts reach your terminal and its scrollback** (`steel voice listen`, `steel chat --voice`). The decision log never contains them.
+- **Recognition makes mistakes.** You are shown the transcript first for that reason. Accuracy in Spanish and Italian has not been measured, English accuracy rests on three synthetic sentences, and the speed figures were taken on a busy machine.
+- **The real microphone path is not exercised by the test suite** (a rule of this project). It was checked only with fakes, a pseudo-terminal, and one `arecord` run against the ALSA `null` device. `scripts/voice_check.py` is the live check and has been written but not run.
+- **Spoken replies** (`--speak`) go through `espeak-ng` if installed, with the text on standard input. It is not installed here, so that path has only been tested with a fake. Speaking is not behind a permission capability.
+
 ## Before anything new is connected
 
-Tools, voice, vision and remote access each need a reviewed consent and authorization design first. The `SteelPolicy` permission policy and two read-only memory tools exist. Every further tool needs its own review of what it reads, writes and sends, and letting the chat model call a tool needs a review of prompt injection through stored text.
+Tools, vision and remote access each need a reviewed consent and authorization design first (voice input has one: [docs/VOICE.md](docs/VOICE.md)). The `SteelPolicy` permission policy, two read-only memory tools and the microphone tool exist. Every further tool needs its own review of what it reads, writes and sends, and letting the chat model call a tool needs a review of prompt injection through stored text.
 
 Do not publish real data in issues. Report problems with invented examples. No legal compliance, independent audit or certification is claimed.

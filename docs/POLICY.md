@@ -1,6 +1,6 @@
 # SteelPolicy: permission policy for tool calls (design)
 
-Status: **implemented and tested (Phases 2a and 2b). Two read-only memory tools exist (section 7); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only command that runs one is `steel tool call`.** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
+Status: **implemented and tested (Phases 2a to 2c). Two read-only memory tools exist (section 7) and one microphone tool (section 7.1); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only commands that run one are `steel tool call` (memory) and `steel voice listen` / `steel chat --voice` (microphone).** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
 
 Sources read in full, at OpenJarvis commit `108d257188cbad85f2e50209d9a61669ea4dec33`: `src/openjarvis/security/capabilities.py`, `src/openjarvis/tools/_stubs.py` (this is where `ToolExecutor` is defined).
 
@@ -156,7 +156,7 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 {"capability": "sensor:camera", "pattern": "camera_snapshot"}
 ```
 
-`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused).
+`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1).
 
 ### 3.4 Paths (`fs:read`, `fs:write`)
 
@@ -263,6 +263,27 @@ steel tool call memory_search_notes --agent cli --args '{"query": "tea"}'   # "N
 `steel tool list [--agent ID]` is read-only: it loads the grants without an audit log, so it cannot write one. `steel tool call NAME --agent ID [--args JSON]` runs exactly one call. An invalid grants file means an empty policy for that call: it is denied, and the denial is logged. An unknown tool name, a bad agent id or invalid JSON arguments are refused before any decision (so nothing is logged for them).
 
 **Named people.** A fact such as "User has a sister named Mara" is returned by `memory_search_facts` when `memory:read:facts` is granted. That is the owner's decision (docs/MEMORY_QUALITY.md) and a test checks it on purpose.
+
+### 7.1 The microphone tool and its grant (Phase 2c)
+
+`steel/tools/microphone.py` defines `microphone_listen`. It declares exactly one capability, `sensor:microphone`, takes no arguments and returns the transcript text, never audio. It is built only by `get_microphone_tool(home)` and run only through `build_executor`, as the agent `voice`, by `steel voice listen` and `steel chat --voice`. Nothing is registered with the OpenJarvis `ToolRegistry`. With no grant nothing is captured and the denial is logged (agent, capability, `deny`, reason; never the transcript).
+
+A sensor grant must name this exact tool. Example, written **by hand** as `~/.openjarvis/steel_policy.json` (mode 600; STEEL never writes it), also printed by `steel voice check` while the grant is missing:
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "voice",
+      "grants": [
+        {"capability": "sensor:microphone", "pattern": "microphone_listen"}
+      ]
+    }
+  ]
+}
+```
+
+A grant is necessary, not sufficient: the tool also refuses without the consent file (`steel voice consent`), without a terminal for the REC line, and without the owner's start key. The policy cannot limit what is heard, how long, or by whom; those limits are in the tool and in docs/VOICE.md. `steel tool list` shows only the memory tools; `steel voice check` reports the microphone grant. The tests that prove each rule are listed in docs/VOICE.md section 9 (they are not repeated in section 8).
 
 ## 8. Evidence
 

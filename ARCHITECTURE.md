@@ -2,7 +2,7 @@
 
 ## Phases 1 and 1b: persistent memory, no tools
 
-(Phase 2a added a permission policy and Phase 2b two read-only memory tools that only `steel tool call` runs; see the sections after the memory notes below.)
+(Phase 2a added a permission policy, Phase 2b two read-only memory tools that only `steel tool call` runs, and Phase 2c push-to-talk voice input; see the sections after the memory notes below.)
 
 ```mermaid
 flowchart LR
@@ -63,6 +63,38 @@ The chat does not enter this flow: the model cannot call a tool. Only `steel too
 | `steel/tools/memory_search.py`, `steel/tools/__init__.py` | `memory_search_facts` and `memory_search_notes` (one capability each, read only) and `get_memory_tools(home)`, the only function that builds them. Nothing is registered with OpenJarvis |
 | `docs/POLICY.md` | The design, the exact `ToolExecutor` interface, every rule, every limit, and the test for each rule |
 
+### Phase 2c: push-to-talk voice (command line only)
+
+```mermaid
+flowchart LR
+    K[Enter key, in the terminal] --> T[MicrophoneListen tool]
+    CMD[steel voice listen / steel chat --voice] --> E[build_executor: policy check, agent voice]
+    E -->|sensor:microphone granted by hand, logged| T
+    T -->|consent file present| R[record: print REC line FIRST]
+    R -->|proof the line is shown| A[ArecordSource: arecord to a pipe, no file]
+    A -->|raw audio in RAM| W[LocalWhisper: VAD, language, faster-whisper from a local directory]
+    W -->|transcript text only; audio zeroed| T
+    T --> C{owner: Enter = send, Esc = discard}
+    C -->|send| S[ChatSession.ask: guardrails + user-only fact extraction]
+    C -->|discard| X[dropped: never sent, published or remembered]
+```
+
+The transcript is treated exactly like typed text from the moment the owner confirms it; before that it only exists in the terminal and in the tool result. `steel voice check` is read-only and builds none of this.
+
+| Module | Role |
+| --- | --- |
+| `steel/voice/consent.py` | The consent text and the consent file (a timestamp, mode 600, deletable). No file means no microphone |
+| `steel/voice/indicator.py` | The `● REC` line and `IndicatorShown`, the proof the line was printed; only `Indicator.show` can make one |
+| `steel/voice/recorder.py` | `record()`: the only caller of `AudioSource.open`. Prints the line, opens, reads ~100 ms chunks, stops at Enter, the maximum length, the silence cut-off or a cancel, always closes |
+| `steel/voice/source.py`, `steel/voice/mic.py` | The `AudioSource` interface; the real source runs `arecord` into a pipe (needs the proof to open, hard `-d` limit, no file). Never imports `sounddevice` |
+| `steel/voice/terminal.py` | Enter to start, Enter to stop, Enter/Esc to confirm, on a real terminal; type-ahead is flushed |
+| `steel/voice/stt.py` | `LocalWhisper`: `faster-whisper` on the CPU from a model directory with `local_files_only`, audio as a NumPy array, Silero VAD before the model, restricted language detection. Imports neither `openjarvis.speech` nor any cloud code |
+| `steel/voice/config.py` | `STEEL_VOICE_*` settings, validated, with safe fallbacks |
+| `steel/voice/commands.py`, `steel/voice/speak.py` | `steel voice check/consent/revoke/listen`, the `chat --voice` loop, optional `espeak-ng` replies |
+| `steel/tools/microphone.py` | `microphone_listen`: one capability (`sensor:microphone`), no arguments, transcript text only, audio wiped in a `finally`; `get_microphone_tool` in `steel/tools/__init__.py` builds it |
+| `scripts/voice_check.py` | The owner's live check; scratch directory, deleted afterwards |
+| `docs/VOICE.md` | The design (written first), the measurements, the consent text and the test for each claim |
+
 ### Relationship to OpenJarvis
 
 STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are.
@@ -79,9 +111,9 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 - No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
-- No network server, no voice or vision input.
+- No network server, no vision input, no wake word and no always-on listening. Voice input is push-to-talk only (below).
 - Conversation history is not persisted.
 
 ## Planned extension points
 
-`SteelPolicy` and the first tools (Phases 2a and 2b) are built and tested; connecting a tool to the chat model is not done. Voice and vision may later publish events on the same OpenJarvis `EventBus`. The room-observation store will build on the expiring notes. These are plans, not implemented boundaries.
+`SteelPolicy`, the first tools and push-to-talk voice (Phases 2a to 2c) are built and tested; connecting a tool to the chat model is not done. Vision may later publish events on the same OpenJarvis `EventBus`; voice publishes none. The room-observation store will build on the expiring notes. These are plans, not implemented boundaries.
