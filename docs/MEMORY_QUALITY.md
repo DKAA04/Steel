@@ -95,6 +95,8 @@ Problems: the names, relationships, schedules and health or retirement status of
 
 **Decision (owner, 2026-10-23): facts about other people stay as stored.** Nothing in the code changes for them. They are ordinary facts: covered by the `memory:read:facts` scope in the permission policy (see [POLICY.md](POLICY.md)), so a tool can read them only if it was granted that scope. Per-person handling is revisited when a tool can first read memory.
 
+**Current behavior, now that a tool can read facts (Phase 2b):** `memory_search_facts` returns a fact such as "User has a sister named Mara" to any agent granted `memory:read:facts`, exactly like every other fact. This is deliberate and tested (`tests/test_memory_tools.py`, `NamedPeopleTest`). It is also a reason to be careful with that grant: it exposes the names, relationships and schedules of people who never spoke to STEEL to whatever reads the tool's output. Nothing reads that output but you today (`steel tool call` prints it to your terminal). Changing this means changing that test on purpose.
+
 The earlier proposal is kept here as the list of options to revisit then. None of it is implemented:
 
 1. Flag, don't block: a deterministic check marks entries that mention a capitalised name other than the user's own, shown as a `[person: Mara]` tag in `steel memory list`.

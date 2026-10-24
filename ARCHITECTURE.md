@@ -2,7 +2,7 @@
 
 ## Phases 1 and 1b: persistent memory, no tools
 
-(Phase 2a added a permission policy that nothing uses yet; see the section after the memory notes below.)
+(Phase 2a added a permission policy and Phase 2b two read-only memory tools that only `steel tool call` runs; see the sections after the memory notes below.)
 
 ```mermaid
 flowchart LR
@@ -33,30 +33,34 @@ flowchart LR
 | `steel/timewords.py` | English and Spanish short-term time expressions |
 | `steel/facts.py` | `SteelFactStore(LocalFactStore)`: stable id, `forget(id)`, hash-only forgotten list, duplicate guard, routing of time-bound facts to notes |
 | `steel/memory_files.py` | Exact-line ids and removal for `MEMORY.md` / `USER.md` |
-| `steel/memory.py` | `SteelMemory`: list (with expiry), remember, forget (with related), wipe and audit across all stores |
-| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (one read-only accessor added); hold time-bound facts and `remember --days`; each note has a `source` (`user`, `time_bound`, `room`; nothing writes `room` yet); older databases are migrated to `user` |
+| `steel/memory.py` | `SteelMemory`: list (with expiry), remember, forget (with related), wipe and audit across all stores; `readable(source)`, the read-only view the tools use |
+| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (`read_unexpired` opens the file read-only and deletes nothing, for the tools); hold time-bound facts and `remember --days`; each note has a `source` (`user`, `time_bound`, `room`; nothing writes `room` yet); older databases are migrated to `user` |
 
-### Phase 2a: permission policy (not connected to anything)
+### Phases 2a and 2b: permission policy and the first tools (command line only)
 
 ```mermaid
 flowchart LR
-    T[future tool call] --> E[SteelToolExecutor from build_executor]
+    T[steel tool call, no model] --> E[SteelToolExecutor from build_executor]
     E -->|file paths in declared arguments| P[SteelPolicy.check_path]
     E -->|OpenJarvis ToolExecutor.execute| C[SteelPolicy.check: agent, capability, tool name]
     P --> L[steel_policy_audit.jsonl]
     C --> L
     G[steel_policy.json, by hand] --> P
     G --> C
-    C -->|allowed only if granted and logged| X[tool.execute]
+    C -->|allowed only if granted and logged| X[memory_search_facts / memory_search_notes]
+    X -->|read only, no purge| R[SteelMemory.readable]
+    R --> J2[memory_facts.jsonl]
+    R --> N2[steel_notes.sqlite3, opened mode=ro]
 ```
 
-No tool exists, so nothing enters this flow today. `steel policy show` and `steel doctor` read the grants file; neither writes the log.
+The chat does not enter this flow: the model cannot call a tool. Only `steel tool call` does. `steel policy show`, `steel tool list` and `steel doctor` read the grants file and write nothing.
 
 | Module | Role |
 | --- | --- |
 | `steel/security/policy.py` | `SteelPolicy`: deny by default, fixed capability vocabulary, grants per agent, traversal-safe path matching, one grantable wildcard (`memory:read:*`), sensors never wildcarded. Adapted from OpenJarvis `capabilities.py` (see docs/PROVENANCE.md). No OpenJarvis import |
 | `steel/security/audit.py` | Names-only decision log, mode 600, rotated at 5 MB (3 files kept); `write()` has no parameter for resources or text |
 | `steel/security/executor.py` | `build_executor`: the only place STEEL builds a `ToolExecutor`. Refuses a missing policy, tools without declared capabilities, and file tools without declared path arguments |
+| `steel/tools/memory_search.py`, `steel/tools/__init__.py` | `memory_search_facts` and `memory_search_notes` (one capability each, read only) and `get_memory_tools(home)`, the only function that builds them. Nothing is registered with OpenJarvis |
 | `docs/POLICY.md` | The design, the exact `ToolExecutor` interface, every rule, every limit, and the test for each rule |
 
 ### Relationship to OpenJarvis
@@ -73,11 +77,11 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 ### What is not here
 
-- No agent loop and no registered tools (`[tools] enabled = []`). `build_executor` exists but is called only by tests. The `memory_manage` tool is deliberately not used.
+- No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
 - No network server, no voice or vision input.
 - Conversation history is not persisted.
 
 ## Planned extension points
 
-`SteelPolicy` (Phase 2a) is built and tested; the first tool will be the first user of it. Voice and vision may later publish events on the same OpenJarvis `EventBus`. The room-observation store will build on the expiring notes. These are plans, not implemented boundaries.
+`SteelPolicy` and the first tools (Phases 2a and 2b) are built and tested; connecting a tool to the chat model is not done. Voice and vision may later publish events on the same OpenJarvis `EventBus`. The room-observation store will build on the expiring notes. These are plans, not implemented boundaries.

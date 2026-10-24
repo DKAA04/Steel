@@ -1,6 +1,6 @@
 # Security and privacy boundaries
 
-STEEL is an early personal prototype for one trusted local user. It has **persistent memory and no tools**. A deny-by-default permission policy exists (Phase 2a, [docs/POLICY.md](docs/POLICY.md)) but nothing is connected to it yet. It has no microphone or camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
+STEEL is an early personal prototype for one trusted local user. It has **persistent memory**. The chat model has **no tools**. Two read-only memory-search tools exist behind a deny-by-default permission policy (Phases 2a and 2b, [docs/POLICY.md](docs/POLICY.md)); only the owner can run them, from the command line (`steel tool call`), and no model is involved in that path. It has no microphone or camera access, no shell execution, no file access by the model and no listening server. It talks to a local Ollama model over `localhost`.
 
 ## What is stored, and where
 
@@ -51,15 +51,19 @@ Wiping `audit.db` also deletes its tamper-evident security history. This is deli
 Full list in [docs/POLICY.md](docs/POLICY.md) section 4. In short:
 
 - **It is not a sandbox.** It decides only for calls made through the `ToolExecutor` that `build_executor` returns. Code running in the STEEL process can ignore it. Tools are trusted code.
-- **No tool exists yet**, so the policy has been tested with fake tools only.
+- **Only two tools exist** (`memory_search_facts`, `memory_search_notes`), both read-only and both tested. The path and shell/network rules have still only been tested with fake tools.
 - **File rules cover declared path arguments only** and are checked at one moment (a symlink swapped later is not caught). Other capabilities (`net:outbound`, `shell:exec`, memory) are all-or-nothing per tool: they do not limit hosts, commands or which memory entries.
 - **The grants file is yours.** Whoever can write `steel_policy.json` can grant anything. STEEL refuses it only if it is a symlink, owned by someone else, or writable by group/others. A broken file means nothing is granted.
 - **Wildcards are nearly gone.** A grant may use only `memory:read:*`; a bare `*` or any other wildcard makes the whole grants file invalid (everything is then denied). `shell:exec`, `net:outbound`, `memory:write` and the rest need their exact name. `deny` entries may still use wildcards.
 - **The decision log** is a plain file: not encrypted, not tamper-evident, deletable by anyone who can write the home directory. Above 5 MB it is renamed to `.1` (then `.2`, `.3`; the oldest is deleted), so it holds at most about 20 MB of the most recent decisions; if the rotation fails the decision is a deny. Rotation is not safe against several STEEL processes writing at the same moment (untested). `steel wipe` keeps the log and its rotated files unless `--include-audit` is given, which deletes all of them.
-- **Facts about other people** (names, relatives) are covered by the same `memory:read:facts` grant as any other fact; there is no per-person rule.
+- **Facts about other people** (names, relatives) are covered by the same `memory:read:facts` grant as any other fact; there is no per-person rule, and `memory_search_facts` returns them (a test checks this on purpose).
+- **The memory tools return stored text.** That text came from what you typed, or from a model's extraction of it, and could contain instructions. Every result starts with a fixed line saying it is data, not instructions, but that line is a request to a reader, not enforcement. Nothing feeds tool results to a model today; connecting them to the chat needs its own review.
+- **A grant of `memory:read:facts` is the whole facts store**, minus quarantined and forgotten entries. It cannot be limited to some entries or to a topic.
+- **`steel tool call` prints the result to your terminal** (and so to your terminal scrollback). The decision log never holds the query or the result.
+- **Arguments and results reach the OpenJarvis event bus** when an executor is given one. `steel tool call` gives it none, and STEEL subscribes nothing that stores them.
 
 ## Before anything new is connected
 
-Tools, voice, vision and remote access each need a reviewed consent and authorization design first. The `SteelPolicy` permission policy now exists; the first tool still needs its own review of what it reads, writes and sends.
+Tools, voice, vision and remote access each need a reviewed consent and authorization design first. The `SteelPolicy` permission policy and two read-only memory tools exist. Every further tool needs its own review of what it reads, writes and sends, and letting the chat model call a tool needs a review of prompt injection through stored text.
 
 Do not publish real data in issues. Report problems with invented examples. No legal compliance, independent audit or certification is claimed.
