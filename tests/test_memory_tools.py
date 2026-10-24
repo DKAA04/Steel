@@ -504,6 +504,8 @@ class ReadOnlyTest(ToolCase):
         }
         found: list[str] = []
         for path in source.glob("*.py"):
+            if path.name == "microphone.py":
+                continue  # a different tool: tests/test_voice_tool.py and test_voice_stt.py
             tree = ast.parse(path.read_text(encoding="utf-8"))
             for node in ast.walk(tree):
                 if isinstance(node, ast.Import):

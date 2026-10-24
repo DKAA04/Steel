@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import struct
+import time
 
 from steel.voice.indicator import IndicatorShown
 from steel.voice.source import BYTES_PER_SECOND, CHUNK_BYTES
@@ -53,10 +54,12 @@ class FakeSource:
         screen: io.StringIO | None = None,
         forever: bytes | None = None,
         fail_read: Exception | None = None,
+        delay: float = 0.0,
     ) -> None:
         self.chunks = list(chunks or [])
         self.forever = forever
         self.fail_read = fail_read
+        self.delay = delay  # seconds of real time per read, for tests with threads
         self.screen = screen
         self.screen_at_open: str | None = None
         self.opened = 0
@@ -73,6 +76,8 @@ class FakeSource:
 
     def read(self) -> bytes:
         self.reads += 1
+        if self.delay:
+            time.sleep(self.delay)
         if self.fail_read is not None:
             raise self.fail_read
         if self.chunks:
