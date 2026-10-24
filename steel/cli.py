@@ -10,6 +10,8 @@ steel wipe --confirm [--include-audit]   empty every memory store (the policy lo
 steel policy show         read-only: permission grants and the capability list
 steel tool list [--agent ID]      the tools, what each needs, allowed or denied (read-only)
 steel tool call NAME --agent ID [--args JSON]   run ONE tool call through the policy (no model)
+steel voice check|consent|revoke|listen   push-to-talk voice input (docs/VOICE.md); check is read-only
+steel chat --voice [--speak]   chat where an empty line means "speak"
 steel notes ...           the original expiring-note commands
 """
 
@@ -229,7 +231,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     sub = parser.add_subparsers(dest="command", required=True)
     sub.add_parser("doctor", help="Check pin, Rust extension, config, permissions.")
-    sub.add_parser("chat", help="Chat with automatic memory and no tools.")
+    chat = sub.add_parser("chat", help="Chat with automatic memory and no tools.")
+    chat.add_argument(
+        "--voice",
+        action="store_true",
+        help="Push-to-talk: an empty line records one utterance (needs consent and a grant).",
+    )
+    chat.add_argument(
+        "--speak",
+        action="store_true",
+        help="With --voice: speak replies if a local espeak-ng exists.",
+    )
     mem = sub.add_parser("memory", help="Inspect memory.")
     mem.add_argument("action", choices=["list", "audit"])
     remember = sub.add_parser(
@@ -267,6 +279,13 @@ def main(argv: list[str] | None = None) -> int:
     tool_call.add_argument(
         "--args", default="{}", help='JSON object, e.g. \'{"query": "tea"}\''
     )
+    voice = sub.add_parser("voice", help="Push-to-talk voice input (local only).")
+    voice.add_argument(
+        "action",
+        choices=["check", "consent", "revoke", "listen"],
+        help="check: read-only report; consent / revoke: manage consent; "
+        "listen: one push-to-talk capture.",
+    )
     notes = sub.add_parser("notes", help="Original expiring-note commands.")
     notes.add_argument("rest", nargs=argparse.REMAINDER)
     args = parser.parse_args(argv)
@@ -295,6 +314,15 @@ def main(argv: list[str] | None = None) -> int:
         from steel.home import steel_home
 
         return _tool_list(steel_home(), args.agent)
+
+    if args.command == "voice" and args.action == "check":
+        from steel.home import steel_home
+        from steel.voice.commands import voice_check
+
+        return voice_check(steel_home())  # read only: no harden(), no microphone
+
+    if args.command == "chat" and args.speak and not args.voice:
+        parser.error("--speak needs --voice.")
 
     if args.command == "wipe" and not args.confirm:
         parser.error("wipe deletes every memory store; add --confirm.")
@@ -359,6 +387,24 @@ def main(argv: list[str] | None = None) -> int:
         print("All memory stores are empty.")
     elif args.command == "tool":
         return _tool_call(home, args.name, args.agent, args.args)
+    elif args.command == "voice":
+        from steel.voice import commands as voice_commands
+
+        if args.action == "consent":
+            return voice_commands.voice_consent(home)
+        if args.action == "revoke":
+            return voice_commands.voice_revoke(home)
+        return voice_commands.voice_listen(home)
+    elif args.command == "chat" and args.voice:
+        from steel.chat import open_session
+        from steel.voice import commands as voice_commands
+        from steel.voice.consent import has_consent
+
+        if not has_consent(home):  # before loading a model: nothing to wait for
+            return voice_commands.no_consent()
+        return voice_commands.run_voice_repl(
+            open_session(config, home), home, speak=args.speak
+        )
     elif args.command == "chat":
         from steel.chat import open_session, run_repl
 

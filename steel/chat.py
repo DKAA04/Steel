@@ -205,9 +205,11 @@ def run_repl(session: ChatSession) -> None:
     except KeyboardInterrupt:
         print()
     finally:
-        print("Saving memory (waiting for fact extraction to finish)...")
-        if not session.close():
-            print(
-                "Fact extraction was still running, so the pending facts "
-                "were not saved."
-            )
+        finish(session)
+
+
+def finish(session: ChatSession) -> None:
+    """Leave the chat: wait (at most the configured time) for fact extraction."""
+    print("Saving memory (waiting for fact extraction to finish)...")
+    if not session.close():
+        print("Fact extraction was still running, so the pending facts were not saved.")

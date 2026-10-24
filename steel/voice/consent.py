@@ -36,22 +36,27 @@ def consent_path(home: Path) -> Path:
     return home / VOICE_CONSENT_FILE
 
 
-def has_consent(home: Path) -> bool:
-    """True only for a well-formed consent file that is ours and private."""
+def read_consent(home: Path) -> str | None:
+    """The timestamp in a well-formed consent file that is ours and private, else None."""
     path = consent_path(home)
     try:
         info = os.lstat(path)
         if not stat.S_ISREG(info.st_mode):  # a symlink is not followed
-            return False
+            return None
         if info.st_uid != os.getuid() or info.st_mode & 0o022:
-            return False
+            return None
         data = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(data, dict) or set(data) != {"consented_at"}:
-            return False
-        datetime.fromisoformat(data["consented_at"])  # a bad value raises
-        return True
+            return None
+        stamp = data["consented_at"]
+        datetime.fromisoformat(stamp)  # a bad value raises
+        return str(stamp)
     except (OSError, ValueError, TypeError):
-        return False  # unreadable or malformed: no consent
+        return None  # unreadable or malformed: no consent
+
+
+def has_consent(home: Path) -> bool:
+    return read_consent(home) is not None
 
 
 def record_consent(home: Path, *, now: datetime | None = None) -> str:

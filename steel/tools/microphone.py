@@ -93,6 +93,13 @@ class MicrophoneListen(BaseTool):
         """Ask a recording in progress to stop (Ctrl-C from the command line)."""
         self._cancel.set()
 
+    def wait_idle(self, timeout: float) -> bool:
+        """Wait until no recording is running (after cancel). False on timeout."""
+        if self._busy.acquire(timeout=timeout):
+            self._busy.release()
+            return True
+        return False
+
     def execute(self, **params: Any) -> ToolResult:
         # Messages never contain transcript text.
         if params:
