@@ -220,7 +220,7 @@ def _executor(home: Path, tool: Any) -> Any:
     return build_executor([tool], policy=policy, agent_id=VOICE_AGENT)
 
 
-def _listen_once(executor: Any, tool: Any) -> Any:
+def listen_once(executor: Any, tool: Any) -> Any:
     """One tool call. Ctrl-C asks the recording to stop and waits for it to end."""
     call = ToolCall(id="voice", name=MICROPHONE_TOOL, arguments="{}")
     try:
@@ -238,7 +238,7 @@ def voice_listen(home: Path, *, tool: Any = None) -> int:
     tool = tool or get_microphone_tool(home)
     executor = _executor(home, tool)
     try:
-        result = _listen_once(executor, tool)
+        result = listen_once(executor, tool)
     except KeyboardInterrupt:
         print("\nCancelled.", file=sys.stderr)
         return 130
@@ -293,7 +293,7 @@ def run_voice_repl(
             else:
                 terminal.arm()  # this Enter is the start key
                 try:
-                    result = _listen_once(executor, tool)
+                    result = listen_once(executor, tool)
                 except KeyboardInterrupt:
                     print("\nCancelled.")
                     continue
