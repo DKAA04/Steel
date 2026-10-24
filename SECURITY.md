@@ -55,7 +55,7 @@ Full list in [docs/POLICY.md](docs/POLICY.md) section 4. In short:
 - **File rules cover declared path arguments only** and are checked at one moment (a symlink swapped later is not caught). Other capabilities (`net:outbound`, `shell:exec`, memory) are all-or-nothing per tool: they do not limit hosts, commands or which memory entries.
 - **The grants file is yours.** Whoever can write `steel_policy.json` can grant anything. STEEL refuses it only if it is a symlink, owned by someone else, or writable by group/others. A broken file means nothing is granted.
 - **Wildcards are nearly gone.** A grant may use only `memory:read:*`; a bare `*` or any other wildcard makes the whole grants file invalid (everything is then denied). `shell:exec`, `net:outbound`, `memory:write` and the rest need their exact name. `deny` entries may still use wildcards.
-- **The decision log** is a plain file: not encrypted, not tamper-evident, not rotated, deletable by anyone who can write the home directory. `steel wipe` keeps it unless `--include-audit` is given.
+- **The decision log** is a plain file: not encrypted, not tamper-evident, deletable by anyone who can write the home directory. Above 5 MB it is renamed to `.1` (then `.2`, `.3`; the oldest is deleted), so it holds at most about 20 MB of the most recent decisions; if the rotation fails the decision is a deny. Rotation is not safe against several STEEL processes writing at the same moment (untested). `steel wipe` keeps the log and its rotated files unless `--include-audit` is given, which deletes all of them.
 - **Facts about other people** (names, relatives) are covered by the same `memory:read:facts` grant as any other fact; there is no per-person rule.
 
 ## Before anything new is connected

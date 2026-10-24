@@ -102,8 +102,10 @@ def _policy_show(home: Path) -> int:
         print("Nothing is loaded, so every tool call is denied.")
         return 1
     print(f"Policy file: {path} ({'present' if path.exists() else 'absent'})")
-    count = PolicyAuditLog(home / POLICY_AUDIT_FILE).count()
-    print(f"Decision log: {home / POLICY_AUDIT_FILE} ({count} decision(s))")
+    log = PolicyAuditLog(home / POLICY_AUDIT_FILE)
+    rotated = len(log.rotated_files())
+    extra = f", {rotated} rotated file(s)" if rotated else ""
+    print(f"Decision log: {log.path} ({log.count()} decision(s){extra})")
     print("Default: deny. A call is allowed only by a grant below.")
     agents = policy.agents()
     print("Agents and grants:" if agents else "Agents and grants: (none)")

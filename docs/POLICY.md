@@ -185,8 +185,9 @@ Every decision, allow or deny, from `check()` and `check_path()`, is appended as
 - Values that came from the caller and are not validated are not echoed: an agent id that fails the pattern is logged as `(invalid)`, a capability outside the vocabulary as `(unknown)`.
 - Created with mode 600 (`O_CREAT|O_APPEND|O_NOFOLLOW`, then `fchmod 600`).
 - **No log, no action**: if the line cannot be written, an allow is turned into a deny (`audit_failed`).
-- `steel wipe` **keeps** this file; `steel wipe --confirm --include-audit` deletes it. It holds no text, only names and reason codes.
-- It is a plain file: not encrypted, not tamper-evident, not rotated (it grows without limit).
+- **Rotation**: when a new line would take the file past 5 MB (`PolicyAuditLog(max_bytes=...)`, a constructor argument so tests can use a tiny limit), `steel_policy_audit.jsonl` is renamed to `.1`, shifting `.1` -> `.2` -> `.3` and deleting the old `.3`, and a new file starts. The active file is `lstat`-checked first (a symlink or non-regular file is refused), `rename` replaces a symlink planted at a rotated name instead of writing through it, the new file is opened with `O_NOFOLLOW` and mode 600, and `.1` is set to 600. **If the rotation fails the write raises, and the decision is a deny** (`audit_failed`). Only the newest decisions survive: about 20 MB at most.
+- `steel wipe` **keeps** the file and its rotated files; `steel wipe --confirm --include-audit` deletes all of them. They hold no text, only names and reason codes.
+- It is a plain file: not encrypted, not tamper-evident. Rotation is not safe against several STEEL processes writing at the same moment (not tested; a line could land in a rotated file).
 
 ## 4. What this policy does NOT do
 
@@ -220,11 +221,11 @@ Recorded for the owner; the code takes the conservative side of each.
 
 1. *Decided in Phase 2b:* grants may use only `memory:read:*`; a bare `*` invalidates the file (3.2).
 2. Legacy OpenJarvis names are denied rather than aliased. Is that the wanted behaviour?
-3. The audit log is not rotated.
+3. *Decided in Phase 2b:* the audit log rotates at 5 MB, three files kept (3.5).
 
 ## 7. Evidence
 
-Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/test_policy_cli.py` (C). All run without a model or network, in temporary directories. The key lines were also mutation-checked: with each of the changes below made by hand, at least one of these tests failed (default allow, no `..` rejection, string-prefix matching, no symlink resolution, wildcard granting sensors, exception treated as allow, audit failure ignored, resource leaked into the log, empty capabilities accepted, no policy accepted, path check skipped, unknown-agent fallback).
+Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/test_policy_cli.py` (C), `tests/test_audit_rotation.py` (R). All run without a model or network, in temporary directories. The key lines were also mutation-checked: with each of the changes below made by hand, at least one of these tests failed (default allow, no `..` rejection, string-prefix matching, no symlink resolution, wildcard granting sensors, exception treated as allow, audit failure ignored, resource leaked into the log, empty capabilities accepted, no policy accepted, path check skipped, unknown-agent fallback).
 
 | Rule | Test |
 | --- | --- |
@@ -250,7 +251,10 @@ Test files: `tests/test_policy.py` (P), `tests/test_executor.py` (E), `tests/tes
 | log mode 600 | P `test_log_has_mode_600_when_created_and_when_it_already_existed`, `test_log_is_created_private_even_with_a_permissive_umask` |
 | no log, no allow; symlinked log refused | P `test_an_allow_becomes_a_deny_when_the_log_cannot_be_written`, `test_a_symlinked_log_is_refused_not_followed` |
 | policy file validation, symlink or loose mode refused | P `PolicyFileTest` (all five tests) |
-| `wipe` keeps the log; `--include-audit` removes it | C `WipeKeepsPolicyLogTest` |
+| `wipe` keeps the log; `--include-audit` removes it and the rotated files | C `WipeKeepsPolicyLogTest` |
+| the log rotates over the limit, shifts `.1` -> `.3`, drops the oldest, loses nothing within the kept files | R `RotationTest` (tiny limit via the constructor) |
+| every rotated and new file is mode 600, also under a permissive umask and for an old wide-open log | R `test_every_file_is_mode_600`, `test_a_wide_open_old_log_is_private_after_rotation`, `test_new_files_are_private_even_with_a_permissive_umask` |
+| a failed rotation is a deny; symlinks are neither followed nor written through | R `RotationFailsClosedTest` |
 | `steel policy show` read-only, shows grants and vocabulary | C `PolicyShowTest` |
 | `steel doctor` reports "policy: deny-by-default active" | C `DoctorPolicyTest` |
 | real `ToolExecutor` denies a call with no grant, allows it with one | E `DenyThroughRealExecutorTest` |

@@ -210,9 +210,9 @@ class SteelMemory:
                 if path.exists():
                     path.unlink()
                     removed.append(path.name)
-        if include_audit and self.policy_log_path().exists():
-            self.policy_log_path().unlink()
-            removed.append(POLICY_AUDIT_FILE)
+        if include_audit:
+            # The log and its rotated files (.1 to .3).
+            removed += PolicyAuditLog(self.policy_log_path()).remove_all()
         return removed
 
     # -- audit -------------------------------------------------------------
@@ -250,10 +250,12 @@ class SteelMemory:
 
     def policy_log_state(self) -> str:
         """State of the permission-decision log (not part of is_empty)."""
-        path = self.policy_log_path()
-        if not path.exists():
+        log = PolicyAuditLog(self.policy_log_path())
+        rotated = len(log.rotated_files())
+        if not self.policy_log_path().exists() and not rotated:
             return "absent"
-        return f"{PolicyAuditLog(path).count()} decision(s)"
+        state = f"{log.count()} decision(s)"
+        return f"{state}, {rotated} rotated file(s)" if rotated else state
 
     def is_empty(self) -> bool:
         return all(state in ("empty", "absent") for state in self.audit().values())

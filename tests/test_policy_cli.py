@@ -64,6 +64,34 @@ class WipeKeepsPolicyLogTest(PolicyCliCase):
         self.assertIn("policy log: absent", text)
         self.assertIn(LOG, text.splitlines()[0])  # listed under "Removed:"
 
+    def make_rotated_logs(self) -> list[Path]:
+        log = self.make_log()
+        rotated = [self.home / f"{LOG}.{n}" for n in (1, 2, 3)]
+        for path in rotated:
+            path.write_text('{"ts": "x"}\n')
+            path.chmod(0o600)
+        return [log, *rotated]
+
+    def test_wipe_keeps_rotated_log_files_by_default(self) -> None:
+        files = self.make_rotated_logs()
+        text = self.run_cli("wipe", "--confirm")
+        for path in files:
+            self.assertTrue(path.exists(), path)
+        self.assertIn("3 rotated file(s)", text)
+
+    def test_include_audit_removes_the_rotated_files_too(self) -> None:
+        files = self.make_rotated_logs()
+        text = self.run_cli("wipe", "--confirm", "--include-audit")
+        for path in files:
+            self.assertFalse(path.exists(), path)
+            self.assertIn(path.name, text.splitlines()[0])
+        self.assertIn("policy log: absent", text)
+
+    def test_wipe_api_include_audit_removes_rotated_files(self) -> None:
+        files = self.make_rotated_logs()
+        removed = SteelMemory(self.home).wipe(include_audit=True)
+        self.assertEqual(sorted(removed), sorted(p.name for p in files))
+
     def test_wipe_never_deletes_the_grants_file(self) -> None:
         self.write_grants({"agents": []})
         self.make_log()
@@ -132,6 +160,31 @@ class PolicyShowTest(PolicyCliCase):
         self.assertIn("grant sensor:camera  pattern camera_snapshot", text)
         self.assertIn("deny  net:outbound", text)
         self.assertIn("(no grants: everything denied)", text)
+
+    def test_a_path_grant_shows_where_it_resolved_to(self) -> None:
+        real = self.home.parent / "real-dir"
+        real.mkdir()
+        link = self.home.parent / "link-dir"
+        link.symlink_to(real)
+        self.write_grants(
+            {
+                "agents": [
+                    {
+                        "agent_id": "room",
+                        "grants": [{"capability": "fs:read", "pattern": str(link)}],
+                    }
+                ]
+            }
+        )
+        text = self.run_cli("policy", "show")
+        self.assertIn(f"grant fs:read  pattern {link}", text)
+        self.assertIn(f"resolved to {real.resolve()}", text)
+
+    def test_it_reports_rotated_log_files(self) -> None:
+        self.make_log()
+        (self.home / f"{LOG}.1").write_text("{}\n")
+        text = self.run_cli("policy", "show")
+        self.assertIn("1 decision(s), 1 rotated file(s)", text)
 
     def test_an_invalid_file_is_reported_as_everything_denied(self) -> None:
         self.write_grants("not json")
