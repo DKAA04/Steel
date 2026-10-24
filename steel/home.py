@@ -21,6 +21,8 @@ MEMORY_MD = "MEMORY.md"  # OpenJarvis agent memory file
 USER_MD = "USER.md"  # OpenJarvis user profile file
 POLICY_FILE = "steel_policy.json"  # permission grants, written by hand
 POLICY_AUDIT_FILE = "steel_policy_audit.jsonl"  # names-only log of decisions
+VOICE_CONSENT_FILE = "steel_voice_consent.json"  # when the owner agreed to voice input
+MODELS_DIR = "steel_models"  # speech models fetched by hand (a directory)
 
 
 def steel_home() -> Path:
