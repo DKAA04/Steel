@@ -202,5 +202,45 @@ class BuildingTheToolTest(base.HomeTestCase):
             get_camera_tool(self.home)
 
 
+class DocumentEvidenceTest(unittest.TestCase):
+    def test_every_test_the_document_cites_exists(self) -> None:
+        doc = (ROOT / "docs" / "VISION.md").read_text(encoding="utf-8")
+        evidence = doc.split("## 9. Evidence", 1)[1]
+        cited = re.findall(r"`(test_\w+\.py)::(\w+)\.(test_\w+)`", evidence)
+        self.assertGreater(len(cited), 100, "section 9 cites too few tests")
+        parsed: dict[str, ast.Module] = {}
+        for file, cls, name in sorted(set(cited)):
+            if file not in parsed:
+                parsed[file] = ast.parse((TESTS / file).read_text(encoding="utf-8"))
+            classes = [
+                n
+                for n in ast.walk(parsed[file])
+                if isinstance(n, ast.ClassDef) and n.name == cls
+            ]
+            self.assertTrue(classes, f"{file} has no class {cls}")
+            methods = {
+                n.name for n in classes[0].body if isinstance(n, ast.FunctionDef)
+            }
+            self.assertIn(name, methods, f"{file}::{cls}.{name}")
+
+    def test_every_vision_test_is_cited_in_the_document(self) -> None:
+        doc = (ROOT / "docs" / "VISION.md").read_text(encoding="utf-8")
+        evidence = doc.split("## 9. Evidence", 1)[1]
+        missing = []
+        for path in sorted(TESTS.glob("test_vision_*.py")):
+            if path.name == "test_vision_hygiene.py":
+                continue  # this file's own plumbing tests are not claims
+            for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
+                if isinstance(node, ast.ClassDef) and node.name.endswith("Test"):
+                    for item in node.body:
+                        if isinstance(item, ast.FunctionDef) and item.name.startswith(
+                            "test_"
+                        ):
+                            key = f"{path.name}::{node.name}.{item.name}"
+                            if key not in evidence:
+                                missing.append(key)
+        self.assertEqual(missing, [])
+
+
 if __name__ == "__main__":
     unittest.main()

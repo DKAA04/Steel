@@ -12,6 +12,7 @@ import threading
 import unittest
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import test_steel as base
 from vision_helpers import FakeFrameSource, decode_png, make_frame
@@ -100,6 +101,24 @@ class FrameTest(unittest.TestCase):
         width, height, pixels = decode_png(base64.b64encode(to_png(frame)).decode())
         self.assertEqual((width, height), (12, 6))
         self.assertEqual(pixels, bytes(frame.rgb))
+
+    def test_the_scaled_copy_is_wiped_even_though_the_caller_keeps_its_frame(
+        self,
+    ) -> None:
+        import steel.vision.frame as frame_module
+
+        made: list[Frame] = []
+        real = frame_module.downscale
+
+        def spy(frame: Frame, max_side: int) -> Frame:
+            made.append(real(frame, max_side))
+            return made[-1]
+
+        with mock.patch.object(frame_module, "downscale", spy):
+            encode_for_model(make_frame(640, 480), 448)
+        (small,) = made
+        self.assertEqual(len(small.rgb), 448 * 336 * 3)
+        self.assertEqual(set(small.rgb), {0})
 
     def test_encode_for_model_reports_the_size_it_sent_and_wipes_its_copy(
         self,
@@ -424,6 +443,22 @@ class FfmpegCameraSourceTest(unittest.TestCase):
         source.open(proof())
         with self.assertRaises(OSError):
             source.read_frame()
+
+    def test_the_pixel_buffer_is_wiped_when_the_frame_is_short(self) -> None:
+        seen: list[Any] = []
+
+        class Recording(_Stdout):
+            def readinto(self, buffer: Any) -> int:  # type: ignore[override]
+                seen.append(buffer)
+                return super().readinto(buffer)
+
+        process = _FakeProcess()
+        process.stdout = Recording(b"\x07" * 10)
+        source = FfmpegCameraSource(size=(8, 4), popen=lambda *a, **k: process)
+        source.open(proof())
+        with self.assertRaises(OSError):
+            source.read_frame()
+        self.assertEqual(bytes(seen[0][:10]), bytes(10))  # the 10 bytes it did get
 
     def test_a_stalled_camera_is_ended_by_the_watchdog(self) -> None:
         process = _FakeProcess(stall=True)

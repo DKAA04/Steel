@@ -113,6 +113,12 @@ class PermissionTest(VisionCase):
         self.assertNotIn("required", spec.parameters)
         self.assertIs(spec.parameters["additionalProperties"], False)
 
+    def test_the_executor_waits_long_enough_for_the_camera_and_the_model(self) -> None:
+        spec = self.tool(
+            config=VisionConfig(capture_timeout=10, model_timeout=240)
+        ).spec
+        self.assertGreaterEqual(spec.timeout_seconds, 10 + 240)
+
     def test_no_consent_means_no_camera(self) -> None:
         self.write_grants(eyes_grant())  # a grant, but no consent file
         result = self.look()
