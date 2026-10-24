@@ -1,6 +1,6 @@
 # SteelPolicy: permission policy for tool calls (design)
 
-Status: **implemented and tested (Phases 2a to 2c). Two read-only memory tools exist (section 7) and one microphone tool (section 7.1); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only commands that run one are `steel tool call` (memory) and `steel voice listen` / `steel chat --voice` (microphone).** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
+Status: **implemented and tested (Phases 2a to 3). Two read-only memory tools exist (section 7), one microphone tool (section 7.1) and one camera tool (section 7.2); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only commands that run one are `steel tool call` (memory), `steel voice listen` / `steel chat --voice` (microphone) and `steel look` (camera).** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
 
 Sources read in full, at OpenJarvis commit `108d257188cbad85f2e50209d9a61669ea4dec33`: `src/openjarvis/security/capabilities.py`, `src/openjarvis/tools/_stubs.py` (this is where `ToolExecutor` is defined).
 
@@ -153,10 +153,10 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 `sensor:camera` and `sensor:microphone` can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
 
 ```json
-{"capability": "sensor:camera", "pattern": "camera_snapshot"}
+{"capability": "sensor:camera", "pattern": "camera_look"}
 ```
 
-`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1).
+`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1); the camera's is `{"capability": "sensor:camera", "pattern": "camera_look"}` for the agent `eyes` (section 7.2).
 
 ### 3.4 Paths (`fs:read`, `fs:write`)
 
@@ -284,6 +284,27 @@ A sensor grant must name this exact tool. Example, written **by hand** as `~/.op
 ```
 
 A grant is necessary, not sufficient: the tool also refuses without the consent file (`steel voice consent`), without a terminal for the REC line, and without the owner's start key. The policy cannot limit what is heard, how long, or by whom; those limits are in the tool and in docs/VOICE.md. `steel tool list` shows only the memory tools; `steel voice check` reports the microphone grant. The tests that prove each rule are listed in docs/VOICE.md section 9 (they are not repeated in section 8).
+
+### 7.2 The camera tool and its grant (Phase 3)
+
+`steel/tools/camera.py` defines `camera_look`. It declares exactly one capability, `sensor:camera`, takes one optional argument (`question`, 1 to 200 characters without control characters) and returns **text**: a fixed first line saying the description is data, not instructions, then the vision model's description. It never returns the picture. It is built only by `get_camera_tool(home)` and run only through `build_executor`, as the agent `eyes`, by `steel look`. Nothing is registered with the OpenJarvis `ToolRegistry`. With no grant nothing is captured and the denial is logged (agent, capability, `deny`, reason; never the question or the description).
+
+A sensor grant must name this exact tool. Example, written **by hand** as `~/.openjarvis/steel_policy.json` (mode 600; STEEL never writes it), also printed by `steel vision check` while the grant is missing:
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "eyes",
+      "grants": [
+        {"capability": "sensor:camera", "pattern": "camera_look"}
+      ]
+    }
+  ]
+}
+```
+
+A grant is necessary, not sufficient: the tool also refuses without the camera consent file (`steel vision consent`, a different file from the microphone's) and without a terminal for the `● CAMERA OPEN` line. The policy cannot limit what the camera sees, who is in view, or what the model says; those limits are in the tool and in docs/VISION.md. The `question` argument is typed by the owner today; if a model is ever allowed to call this tool it becomes model-controlled, and the design must be reviewed first (docs/VISION.md 5.4). A grant of `sensor:camera` to the microphone's agent, or of `sensor:microphone` to `eyes`, opens nothing. The tests that prove each rule are listed in docs/VISION.md section 9 (they are not repeated in section 8).
 
 ## 8. Evidence
 

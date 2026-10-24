@@ -2,7 +2,7 @@
 
 ## Phases 1 and 1b: persistent memory, no tools
 
-(Phase 2a added a permission policy, Phase 2b two read-only memory tools that only `steel tool call` runs, and Phase 2c push-to-talk voice input; see the sections after the memory notes below.)
+(Phase 2a added a permission policy, Phase 2b two read-only memory tools that only `steel tool call` runs, Phase 2c push-to-talk voice input and Phase 3 one-picture camera snapshots; see the sections after the memory notes below.)
 
 ```mermaid
 flowchart LR
@@ -95,9 +95,42 @@ The transcript is treated exactly like typed text from the moment the owner conf
 | `scripts/voice_check.py` | The owner's live check; scratch directory, deleted afterwards |
 | `docs/VOICE.md` | The design (written first), the measurements, the consent text and the test for each claim |
 
+### Phase 3: one camera snapshot (command line only)
+
+```mermaid
+flowchart LR
+    CMD[steel look] --> E[build_executor: policy check, agent eyes]
+    E -->|sensor:camera granted by hand, logged| T[CameraLook tool]
+    T -->|consent file present| C[capture_one: print CAMERA OPEN FIRST]
+    C -->|proof the line is shown| F[FfmpegCameraSource: ffmpeg, ONE raw frame to a pipe, no file]
+    F -->|raw frame in RAM| S[downscale to at most 448 px, PNG in memory, raw frame zeroed]
+    S --> D[OllamaDescriber: local Ollama only, no tools, no memory, redaction on the way out]
+    D -->|text only, first line says DATA| T
+    T --> P[printed to the owner]
+    P --> Q{--save: Enter = keep, Esc = discard}
+    Q -->|Enter| N[steel_notes.sqlite3: source room, 24 h default, 7 days at most]
+    Q -->|Esc| X[dropped]
+```
+
+The description is untrusted data from the moment it exists: it starts with a fixed line saying so, a scanner flags instruction-like text, saved notes keep the line and are listed apart in the chat prompt. `steel vision check` is read-only and builds none of this.
+
+| Module | Role |
+| --- | --- |
+| `steel/consent.py` | The consent-file checks (regular file, ours, not writable by others, one timestamp), shared by the microphone and the camera, each with its own file |
+| `steel/vision/consent.py` | The camera consent text and file. No file means no camera |
+| `steel/vision/indicator.py` | The `● CAMERA OPEN` line and `CameraShown`, the proof the line was printed; only `CameraIndicator.show` can make one |
+| `steel/vision/capture.py` | `capture_one()`: the only caller of `FrameSource.open` for the camera. Prints the line, opens, reads ONE frame, always closes |
+| `steel/vision/source.py`, `steel/vision/camera.py` | The `FrameSource` interface; the real source runs `ffmpeg` and writes one raw frame to a pipe (needs the proof to open, watchdog, no file) |
+| `steel/vision/frame.py` | `Frame`, area-average downscale with NumPy, a PNG encoder from the standard library, wiping. No imaging library |
+| `steel/vision/describe.py` | The fixed system prompt, the "data" line, `OllamaDescriber` (loopback hosts only, `OllamaEngine` + OpenJarvis redaction scanners), text cleaning |
+| `steel/vision/config.py`, `steel/vision/commands.py` | `STEEL_CAMERA_DEVICE` / `STEEL_VISION_MODEL`; `steel vision check/consent/revoke` and `steel look [--save]` |
+| `steel/tools/camera.py` | `camera_look`: one capability (`sensor:camera`), one optional `question`, text only, frame wiped in a `finally`; `get_camera_tool` in `steel/tools/__init__.py` builds it |
+| `scripts/vision_check.py` | The owner's live check; scratch directory, deleted afterwards |
+| `docs/VISION.md` | The design (written first), the measurements, the consent text and the test for each claim |
+
 ### Relationship to OpenJarvis
 
-STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are.
+STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`.
 
 STEEL constructs `MemoryService` itself instead of calling `build_memory_service`, because that helper would create a plain `LocalFactStore` (no forget-by-id, duplicate guard or routing) and OpenJarvis' `FactExtractor`. `SteelFactExtractor` subclasses it and uses only its public `extract` and `system_prompt`. `SteelFactStore.forget` holds the same thread lock and cross-process file lock as upstream `add`/`clear`, and uses LocalFactStore private members. That is why the pin is enforced at runtime.
 
@@ -111,9 +144,9 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 - No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
-- No network server, no vision input, no wake word and no always-on listening. Voice input is push-to-talk only (below).
+- No network server, no wake word, no always-on listening, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above).
 - Conversation history is not persisted.
 
 ## Planned extension points
 
-`SteelPolicy`, the first tools and push-to-talk voice (Phases 2a to 2c) are built and tested; connecting a tool to the chat model is not done. Vision may later publish events on the same OpenJarvis `EventBus`; voice publishes none. The room-observation store will build on the expiring notes. These are plans, not implemented boundaries.
+`SteelPolicy`, the first tools, push-to-talk voice and camera snapshots (Phases 2a to 3) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.
