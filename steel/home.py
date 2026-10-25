@@ -23,6 +23,10 @@ POLICY_FILE = "steel_policy.json"  # permission grants, written by hand
 POLICY_AUDIT_FILE = "steel_policy_audit.jsonl"  # names-only log of decisions
 VOICE_CONSENT_FILE = "steel_voice_consent.json"  # when the owner agreed to voice input
 CAMERA_CONSENT_FILE = "steel_camera_consent.json"  # when the owner agreed to the camera
+WAKE_CONSENT_FILE = (
+    "steel_wake_consent.json"  # when the owner agreed to always-on listening
+)
+JARVIS_PIDFILE = "steel_jarvis.pid"  # the running Jarvis loop, for steel jarvis stop
 MODELS_DIR = "steel_models"  # speech models fetched by hand (a directory)
 
 

@@ -53,6 +53,9 @@ VOCABULARY: dict[str, str] = {
     "memory:write": "add facts or notes",
     "sensor:camera": "read the camera",
     "sensor:microphone": "read the microphone",
+    "sensor:microphone_always_on": (
+        "listen to the microphone continuously for a wake word (docs/JARVIS.md)"
+    ),
     "audio:play": "play sound on the speakers (spoken replies)",
     "net:outbound": "open network connections",
     "fs:read": "read files (needs a path grant)",
@@ -71,7 +74,9 @@ LEGACY_NAMES: dict[str, str] = {
     "code:execute": "shell:exec",
     "memory:read": "memory:read:facts, memory:read:notes or memory:read:room",
 }
-SENSOR_CAPS = frozenset({"sensor:camera", "sensor:microphone"})
+SENSOR_CAPS = frozenset(
+    {"sensor:camera", "sensor:microphone", "sensor:microphone_always_on"}
+)
 # A grant for these must name one exact tool, never "*": the sensors, and the
 # speakers (what is played can be overheard; docs/SPEAK.md section 6).
 EXACT_NAME_CAPS = SENSOR_CAPS | {"audio:play"}

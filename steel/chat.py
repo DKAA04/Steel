@@ -165,8 +165,13 @@ class ChatSession:
         a real turn, so the model's processed prefix can be reused."""
         return self.build_messages(WARMUP_TEXT)
 
-    def ask(self, user_text: str) -> str:
-        """Send one user message and return the reply."""
+    def ask(self, user_text: str, *, remember: bool = True) -> str:
+        """Send one user message and return the reply.
+
+        ``remember=False`` (the Jarvis loop without --remember-voice): the
+        message is not handed to the fact extractor, because a voice heard in
+        the room may not be the owner's (docs/JARVIS.md section 7).
+        """
         messages = self.build_messages(user_text)
         started = self.clock()
         warm = self.warmup
@@ -190,7 +195,8 @@ class ChatSession:
         # text is deliberately EMPTY: a 2B model turns its own replies into
         # "facts about the user" (see docs/MEMORY_QUALITY.md), so only what the
         # user typed may reach the extractor.
-        publish_completed_exchange(self.bus, user_text, "", source="steel")
+        if remember:
+            publish_completed_exchange(self.bus, user_text, "", source="steel")
         return reply
 
     def add_tool_data(self, data: ToolData) -> bool:

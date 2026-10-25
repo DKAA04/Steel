@@ -151,9 +151,15 @@ class SourceHygieneTest(unittest.TestCase):
         for path in (ROOT / "steel").rglob("*.py"):
             if re.search(r"\bsource\.open\(", path.read_text(encoding="utf-8")):
                 callers.append(path.relative_to(ROOT).as_posix())
-        # voice/recorder.py opens the microphone; vision/capture.py opens the camera.
+        # voice/recorder.py opens the push-to-talk microphone, jarvis/listen.py
+        # the always-on one (Phase 5c), vision/capture.py the camera.
         self.assertEqual(
-            sorted(callers), ["steel/vision/capture.py", "steel/voice/recorder.py"]
+            sorted(callers),
+            [
+                "steel/jarvis/listen.py",
+                "steel/vision/capture.py",
+                "steel/voice/recorder.py",
+            ],
         )
 
     def test_importing_the_vision_package_loads_no_camera_or_audio_library(

@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from openjarvis.tools._stubs import BaseTool
 
@@ -34,6 +35,14 @@ from steel.vision.startkey import PictureKey
 from steel.voice.config import VoiceConfig, voice_config
 from steel.voice.indicator import Indicator
 from steel.voice.source import AudioSource
+
+if TYPE_CHECKING:  # the Jarvis parts are imported only when the tool is built
+    from steel.jarvis.config import JarvisConfig
+    from steel.jarvis.indicators import Indicators
+    from steel.jarvis.limits import Limits
+    from steel.jarvis.listen import FrameSource as WakeFrameSource
+    from steel.jarvis.listen import Keys, WakeListen
+    from steel.jarvis.wakeword import WakeEngine
 
 
 def get_memory_tools(home: Path) -> list[BaseTool]:
@@ -176,6 +185,61 @@ def get_speak_tool(
     )
 
 
+def get_wake_tool(
+    home: Path,
+    *,
+    config: JarvisConfig,
+    limits: Limits,
+    indicators: Indicators,
+    keys: Keys | None = None,
+    in_foreground: Callable[[], bool] | None = None,
+    open_source: Callable[[float], WakeFrameSource] | None = None,
+    make_engine: Callable[[], WakeEngine] | None = None,
+    device: str | None = None,
+    clock: Callable[[], float] | None = None,
+) -> WakeListen:
+    """The always-on wake-word tool (``wake_listen``, docs/JARVIS.md 3f): the
+    ONLY place STEEL builds it. Wired to ``arecord`` through ``setpriv`` and
+    to openWakeWord on onnxruntime; tests pass fakes for every part.
+
+    Building it opens nothing and loads no model: the engine is made (after
+    ``telemetry_off()``) and the microphone opened only inside ``execute``,
+    after the policy allowed it, the consent was found and both indicators
+    were shown.
+    """
+    from steel.jarvis.keys import KeyPoll, owns_terminal
+    from steel.jarvis.listen import WakeListen
+    from steel.jarvis.models import wake_dir
+
+    if open_source is None:
+        mic = device if device is not None else voice_config().device
+
+        def open_source(seconds: float) -> WakeFrameSource:
+            from steel.jarvis.source import WakeSource
+
+            return WakeSource(mic, seconds)
+
+    if make_engine is None:
+
+        def make_engine() -> WakeEngine:
+            from steel.jarvis.wakeword import OpenWakeWord
+
+            return OpenWakeWord(wake_dir(home))
+
+    options: dict[str, Any] = {} if clock is None else {"clock": clock}
+    return WakeListen(
+        home=home,
+        config=config,
+        limits=limits,
+        indicators=indicators,
+        open_source=open_source,
+        make_engine=make_engine,
+        keys=keys or KeyPoll(),
+        in_foreground=in_foreground or owns_terminal,
+        **options,
+    )
+
+
 __all__ = [
     "CAMERA_TOOL",
     "MICROPHONE_TOOL",
@@ -190,4 +254,5 @@ __all__ = [
     "get_memory_tools",
     "get_microphone_tool",
     "get_speak_tool",
+    "get_wake_tool",
 ]

@@ -60,9 +60,31 @@ To be filled in after the download (Step 2): CPU time per second of audio for th
 ### 3a. A separate written consent that says "always on"
 
 * File `steel_wake_consent.json` in the OpenJarvis home, written **only** by `steel jarvis consent` after the owner types `yes`, with the same checks as the voice and camera consents (`steel/consent.py`: a regular file, the owner's, mode 600, one timestamp). `steel jarvis revoke` deletes it.
-* The text the owner reads (quoted word for word in section 3a.1 once written; a test will compare them) says in plain words: **the microphone stays open (ALWAYS ON) while `steel jarvis` runs**; everything said near the computer is analysed on this computer for the wake word; only what follows the wake word is transcribed; guests, family and phone calls nearby may be heard; false triggers will happen; nothing is recorded or stored before the wake word; how to stop it (`q`, `m`, `steel jarvis stop`, Ctrl-C).
+* The text the owner reads (quoted word for word in section 3a.1; a test compares them) says in plain words: **the microphone stays open (ALWAYS ON) while `steel jarvis` runs**; everything said near the computer is analysed on this computer for the wake word; only what follows the wake word is transcribed; guests, family and phone calls nearby may be heard; false triggers will happen; nothing is recorded or stored before the wake word; how to stop it (`q`, `m`, `steel jarvis stop`, Ctrl-C).
 * **The push-to-talk consent does not count.** No wake consent file means the listening microphone never opens. The post-trigger recording also still needs the voice consent, because it reuses `microphone_listen` (section 6).
 * Tests (planned): no wake consent → no microphone, even with the voice consent; consent written only after a typed yes; the text says "ALWAYS ON".
+
+### 3a.1 The consent text, word for word
+
+`steel jarvis consent` prints this and records consent only after a typed `yes` (`steel/jarvis/consent.py`; a test compares the two):
+
+```text
+STEEL Jarvis loop: ALWAYS-ON LISTENING. Please read.
+
+While "steel jarvis" runs, the microphone of this computer stays open: it is ALWAYS ON until you quit, mute it or a limit ends the session.
+
+- Everything said near this computer is analysed on this computer, 80 milliseconds at a time, by a small model that listens for "hey jarvis". Nothing is recorded, transcribed, stored or sent anywhere before the wake word.
+- After the wake word, the next few seconds are recorded and turned into text on this computer, whoever is speaking. You see the text and can cancel it (Esc) before it is sent to the model.
+- Guests, family, children, people on a phone call and voices from a television or radio may be heard. They have not agreed to this. Tell them, and do not run it where that is not appropriate.
+- False triggers will happen: a word that sounds like "hey jarvis" can start a recording nobody asked for.
+- A red window outside the terminal and a line in the terminal show when the microphone is open. If they cannot be shown, the microphone is not opened.
+- To stop it: press q, press m to mute (the microphone closes), press Ctrl-C, or run "steel jarvis stop" in another terminal. The session ends by itself after 60 minutes, after 20 minutes without a wake word, or after 30 wake words in an hour.
+- It runs only in a terminal you started. There is no background service and nothing starts at login.
+- This permission is stored as a date and time in a file in your OpenJarvis folder. Withdraw it at any time with: steel jarvis revoke
+- Push-to-talk consent (steel voice consent) does not count for this, and this does not replace it: the request after the wake word is recorded by the push-to-talk tool, which needs its own consent. You must also grant the tools by hand in steel_policy.json for the agent "jarvis".
+
+Type yes to agree.
+```
 
 ### 3b. A persistent visible state outside the terminal
 

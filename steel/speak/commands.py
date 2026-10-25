@@ -54,9 +54,11 @@ def _policy(home: Path) -> SteelPolicy:
     return policy
 
 
-def _executor(home: Path, tool: Any, policy: SteelPolicy | None = None) -> Any:
+def _executor(
+    home: Path, tool: Any, policy: SteelPolicy | None = None, agent: str = SPEAK_AGENT
+) -> Any:
     policy = policy or _policy(home)
-    return build_executor([tool], policy=policy, agent_id=SPEAK_AGENT)
+    return build_executor([tool], policy=policy, agent_id=agent)
 
 
 def _call(text: str) -> ToolCall:
@@ -66,16 +68,26 @@ def _call(text: str) -> ToolCall:
 class ChatSpeaker:
     """Speaks each reply of one chat session. Silent for good after a denial."""
 
-    def __init__(self, home: Path, *, tool: Any = None, keys: Any = None) -> None:
+    def __init__(
+        self,
+        home: Path,
+        *,
+        tool: Any = None,
+        keys: Any = None,
+        agent: str = SPEAK_AGENT,
+    ) -> None:
         for problem in speak_config_problems():
             print(f"steel: {problem}", file=sys.stderr)
         self.keys = keys or TypedLineStop()
         self.tool = tool or get_speak_tool(home, keys=self.keys)
         policy = _policy(home)
-        self._executor = _executor(home, self.tool, policy)
+        # The push-to-talk chat speaks as agent "voice"; the Jarvis loop as
+        # "jarvis" (docs/JARVIS.md 3f): each needs its own grant.
+        self.agent = agent
+        self._executor = _executor(home, self.tool, policy, agent)
         # Read only (no decision is logged): the engine is started early only
         # if speaking would be allowed. Speaking itself goes through the executor.
-        self._may_prepare = policy.preview(SPEAK_AGENT, "audio:play", SPEAK_TOOL)[0]
+        self._may_prepare = policy.preview(agent, "audio:play", SPEAK_TOOL)[0]
         self.silenced = False
         self.last_timing: SpeechTiming | None = None  # for --timings
 
@@ -118,7 +130,7 @@ class ChatSpeaker:
         if result.content.startswith("Capability '"):
             self.silenced = True  # asked once, logged once
             print(
-                f"Not spoken: '{SPEAK_TOOL}' is not granted to agent '{SPEAK_AGENT}', "
+                f"Not spoken: '{SPEAK_TOOL}' is not granted to agent '{self.agent}', "
                 "so replies stay silent in this chat. Grant it by hand in "
                 f"{POLICY_FILE} (docs/SPEAK.md section 6)."
             )

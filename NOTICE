@@ -25,6 +25,17 @@ OpenJarvis
   src/openjarvis/security/capabilities.py (changed to deny by default; the
   file header and docs/PROVENANCE.md say what changed).
 
+openWakeWord (code only)
+  https://github.com/dscripka/openWakeWord
+  Copyright 2022 David Scripka
+  Licensed under the Apache License, Version 2.0.
+  steel/jarvis/wakeword.py is adapted from openwakeword/utils.py (class
+  AudioFeatures) and openwakeword/model.py (Model.predict), version 0.6.0:
+  the streaming feature path for one model, with smaller fixed buffers that
+  can be zeroed and no downloader (the file header and docs/PROVENANCE.md say
+  what changed). The openWakeWord model files are NOT covered by this entry:
+  see section 4.
+
 
 2. Used, not distributed with STEEL
 -----------------------------------
@@ -40,7 +51,8 @@ Whisper models, MIT License.
 
 onnxruntime, MIT License.
   https://github.com/microsoft/onnxruntime
-  Loaded by faster-whisper (voice detection) and by Piper. It contains
+  Loaded by faster-whisper (voice detection), by Piper and by the wake-word
+  engine of steel jarvis. It contains
   Microsoft telemetry, which STEEL switches off with ORT_DISABLE_TELEMETRY=1
   (docs/VOICE.md section 3).
 
@@ -99,3 +111,26 @@ it_IT-riccardo-x_low
 
 The optional voices that scripts/speak_setup.py fetches only on request
 (--voice) have their own terms, listed in docs/SPEAK.md section 3.
+
+
+4. Wake-word models (downloaded by scripts/wake_setup.py, not in this repository)
+----------------------------------------------------------------------------------
+
+NON-COMMERCIAL USE ONLY.
+
+melspectrogram.onnx, embedding_model.onnx and hey_jarvis_v0.1.onnx, from the
+openWakeWord GitHub release v0.5.1
+(https://github.com/dscripka/openWakeWord/releases/tag/v0.5.1).
+  openWakeWord's README says its pre-trained models are licensed under the
+  Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+  licence (CC BY-NC-SA 4.0, https://creativecommons.org/licenses/by-nc-sa/4.0/)
+  "due to the inclusion of datasets with unknown or restrictive licensing as
+  part of the training data". The README gives no separate licence for the
+  two feature models; STEEL treats all three as CC BY-NC-SA 4.0.
+  Attribution: openWakeWord pre-trained models by David Scripka.
+  Using them for personal, non-commercial purposes is allowed. Any commercial
+  use of steel jarvis with these files (selling it, paid client work) is not;
+  that needs a model whose licence allows it (docs/JARVIS.md section 1.1).
+  STEEL does not distribute, change or retrain these files. Their SHA-256
+  values are pinned in steel/jarvis/models.py; GitHub publishes no checksum
+  for them (docs/JARVIS.md section 1.1 says what the pins prove).

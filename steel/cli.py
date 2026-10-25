@@ -17,6 +17,8 @@ steel chat --timings      one line of stage times after each turn (docs/LATENCY.
 steel speak check|say "TEXT"   spoken replies: check is read-only, say speaks one sentence
 steel vision check|consent|revoke   one-snapshot camera (docs/VISION.md); check is read-only
 steel look ["question"] [--save] [--hours N]   ONE picture, described by the local vision model
+steel jarvis [--remember-voice] [--no-speak] [--timings]   hands-free: wake word "hey jarvis" (docs/JARVIS.md)
+steel jarvis check|consent|revoke|stop   check is read-only; stop works while the loop is stuck
 steel notes ...           the original expiring-note commands
 """
 
@@ -342,6 +344,26 @@ def main(argv: list[str] | None = None) -> int:
         help="check: read-only report; consent / revoke: manage consent; "
         "listen: one push-to-talk capture.",
     )
+    jarvis = sub.add_parser(
+        "jarvis",
+        help="Hands-free loop with the wake word 'hey jarvis' (docs/JARVIS.md).",
+    )
+    jarvis.add_argument(
+        "action",
+        nargs="?",
+        choices=["check", "consent", "revoke", "stop"],
+        help="check: read-only report; consent / revoke: always-on consent; "
+        "stop: kill a running loop from another terminal. No action: run the loop.",
+    )
+    jarvis.add_argument(
+        "--remember-voice",
+        action="store_true",
+        help="let the fact extractor read what is said after the wake word",
+    )
+    jarvis.add_argument("--no-speak", action="store_true", help="print answers only")
+    jarvis.add_argument(
+        "--timings", action="store_true", help="stage times after each turn"
+    )
     speak = sub.add_parser("speak", help="Spoken replies (local Piper engine).")
     speak.add_argument(
         "action",
@@ -404,6 +426,16 @@ def main(argv: list[str] | None = None) -> int:
         from steel.voice.commands import voice_check
 
         return voice_check(steel_home())  # read only: no harden(), no microphone
+
+    if args.command == "jarvis" and args.action in ("check", "stop"):
+        from steel.home import steel_home
+        from steel.jarvis import commands as jarvis_commands
+
+        # Read only, no harden(): check opens nothing; stop must work even when
+        # everything else is stuck.
+        if args.action == "check":
+            return jarvis_commands.jarvis_check(steel_home())
+        return jarvis_commands.jarvis_stop(steel_home())
 
     if args.command == "vision" and args.action == "check":
         from steel.home import steel_home
@@ -496,6 +528,22 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "revoke":
             return voice_commands.voice_revoke(home)
         return voice_commands.voice_listen(home)
+    elif args.command == "jarvis":
+        from steel.jarvis import commands as jarvis_commands
+        from steel.jarvis.config import jarvis_config
+
+        if args.action == "consent":
+            return jarvis_commands.jarvis_consent(home)
+        if args.action == "revoke":
+            return jarvis_commands.jarvis_revoke(home)
+        return jarvis_commands.run_jarvis(
+            home,
+            jarvis_config(),
+            lambda: _open_chat(config, home),
+            remember=args.remember_voice,
+            speak=not args.no_speak,
+            timings=args.timings,
+        )
     elif args.command == "speak":
         from steel.speak.commands import speak_say
 
