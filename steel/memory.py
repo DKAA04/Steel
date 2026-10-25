@@ -30,6 +30,9 @@ from steel.notes import MemoryStore, read_unexpired
 from steel.security.audit import PolicyAuditLog
 from steel.similarity import is_related
 
+# What each read-only search source sees of the notes table.
+_NOTE_KINDS = {"notes": ("user", "time_bound"), "room": ("room",)}
+
 # Limits for `steel remember`.
 MAX_REMEMBER_CHARS = 500
 MAX_REMEMBER_DAYS = 7
@@ -125,13 +128,16 @@ class SteelMemory:
     def readable(self, source: str) -> list[Entry]:
         """Entries a read-only tool may see. Writes nothing, not even a purge.
 
-        ``source`` is "facts" or "notes" (anything else raises ValueError):
+        ``source`` is "facts", "notes" or "room" (anything else raises ValueError):
 
         - facts: the durable facts in memory_facts.jsonl that are fit for recall
           (quarantined ones are left out, as in chat), minus any whose text is on
           the forgotten list. MEMORY.md and USER.md are not included.
-        - notes: unexpired notes of every source. Expired ones are skipped, not
-          deleted. An unreadable database raises OSError/sqlite3.Error.
+        - notes: the owner's unexpired notes (sources user and time_bound).
+          Expired ones are skipped, not deleted. An unreadable database raises
+          OSError/sqlite3.Error.
+        - room: unexpired room notes (camera descriptions), the same way. They
+          are untrusted text, so they have their own capability.
         """
         if source == "facts":
             forgotten = self.facts.forgotten_ids()
@@ -140,14 +146,16 @@ class SteelMemory:
                 for f in self.facts.list()
                 if f.trusted_for_recall and fact_id(f.text) not in forgotten
             ]
-        if source == "notes":
+        if source in _NOTE_KINDS:
             forgotten = self.facts.forgotten_ids()
             return [
-                Entry(NOTE_PREFIX + note_id, "notes", text)
-                for note_id, text in read_unexpired(self.notes_path)
+                Entry(NOTE_PREFIX + note_id, source, text)
+                for note_id, text in read_unexpired(
+                    self.notes_path, sources=_NOTE_KINDS[source]
+                )
                 if fact_id(text) not in forgotten
             ]
-        raise ValueError("source must be 'facts' or 'notes'")
+        raise ValueError("source must be 'facts', 'notes' or 'room'")
 
     def remember(self, text: str, *, days: float | None = None) -> AddResult:
         """``steel remember``: a trusted durable fact, or an expiring note.

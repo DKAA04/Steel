@@ -10,7 +10,11 @@ from openjarvis.tools._stubs import BaseTool
 
 from steel.memory import SteelMemory
 from steel.tools.camera import CAMERA_TOOL, CameraLook, StartKey
-from steel.tools.memory_search import MemorySearchFacts, MemorySearchNotes
+from steel.tools.memory_search import (
+    MemorySearchFacts,
+    MemorySearchNotes,
+    MemorySearchRoom,
+)
 from steel.tools.microphone import (
     MICROPHONE_TOOL,
     MicrophoneListen,
@@ -34,7 +38,11 @@ def get_memory_tools(home: Path) -> list[BaseTool]:
     stores, so it sees changes made after this function ran.
     """
     memory = SteelMemory(home)
-    return [MemorySearchFacts(memory), MemorySearchNotes(memory)]
+    return [
+        MemorySearchFacts(memory),
+        MemorySearchNotes(memory),
+        MemorySearchRoom(memory),
+    ]
 
 
 def get_microphone_tool(
@@ -131,6 +139,7 @@ __all__ = [
     "CameraLook",
     "MemorySearchFacts",
     "MemorySearchNotes",
+    "MemorySearchRoom",
     "MicrophoneListen",
     "get_camera_tool",
     "get_memory_tools",

@@ -16,7 +16,7 @@ What changed from the original:
 - Matching is exact instead of ``fnmatch`` globs. The only wildcard a grant may use
   is ``memory:read:*``; deny entries may use ``*`` and any ``family:*``. File paths
   are matched on resolved path components, not strings.
-- Sensors are never covered by a wildcard.
+- Sensors and room notes (camera text) are never covered by a wildcard.
 - Every decision is written to a names-only audit log; no log, no allow.
 - Any exception inside a decision is a deny.
 - The policy file is validated strictly (unknown keys rejected, symlink or
@@ -47,7 +47,8 @@ logger = logging.getLogger(__name__)
 
 VOCABULARY: dict[str, str] = {
     "memory:read:facts": "read durable facts, including facts about other people",
-    "memory:read:notes": "read expiring notes of any source",
+    "memory:read:notes": "read the owner's expiring notes (not room notes)",
+    "memory:read:room": "read room notes: camera descriptions (untrusted text)",
     "memory:write": "add facts or notes",
     "sensor:camera": "read the camera",
     "sensor:microphone": "read the microphone",
@@ -66,7 +67,7 @@ LEGACY_NAMES: dict[str, str] = {
     "file:write": "fs:write",
     "network:fetch": "net:outbound",
     "code:execute": "shell:exec",
-    "memory:read": "memory:read:facts or memory:read:notes",
+    "memory:read": "memory:read:facts, memory:read:notes or memory:read:room",
 }
 SENSOR_CAPS = frozenset({"sensor:camera", "sensor:microphone"})
 # Capabilities whose resource is a file path, checked by check_path().
@@ -75,6 +76,9 @@ FAMILIES = frozenset(name.split(":")[0] for name in VOCABULARY)
 # The only wildcard a GRANT may use (it covers memory:read:facts and :notes).
 # Everything else needs an exact name; deny entries are looser (denying more is safe).
 GRANT_WILDCARDS = frozenset({"memory:read:*"})
+# Camera text needs its exact name, like a sensor: memory:read:* never covers it,
+# so a grants file written before it existed does not start reading it.
+NOT_BY_WILDCARD = frozenset({"memory:read:room"})
 
 AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:-]{0,63}")
 TOOL_NAME_RE = re.compile(r"[A-Za-z0-9_.-]{1,64}")
@@ -137,6 +141,8 @@ def _grant_covers(expression: str, capability: str) -> bool:
     """
     if expression == capability:
         return True
+    if capability in NOT_BY_WILDCARD:
+        return False
     return expression in GRANT_WILDCARDS and capability.startswith(expression[:-1])
 
 

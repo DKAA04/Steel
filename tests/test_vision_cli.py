@@ -704,7 +704,9 @@ class RoomNotesInMemoryTest(CliCase):
         self.addCleanup(session.close, 2)  # stop its memory-service thread
         self.assertNotIn("Room observations", session._system_prompt())
 
-    def test_the_memory_search_tool_can_return_room_notes_as_documented(self) -> None:
+    def test_room_notes_are_searchable_only_by_the_room_tool(self) -> None:
+        # Since Phase 4: memory_search_room (memory:read:room), not the notes tool.
         self.add_room_note("A red mug on a desk.")
-        texts = [e.text for e in SteelMemory(self.home).readable("notes")]
-        self.assertTrue(any("red mug" in t for t in texts))
+        memory = SteelMemory(self.home)
+        self.assertFalse(any("red mug" in e.text for e in memory.readable("notes")))
+        self.assertTrue(any("red mug" in e.text for e in memory.readable("room")))

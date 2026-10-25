@@ -183,7 +183,14 @@ class WildcardAndSensorTest(PolicyCase):
         self.policy.grant("room", "memory:read:*")
         for cap in ("memory:read:facts", "memory:read:notes"):
             self.assertTrue(self.policy.check("room", cap, "t"), cap)
-        for cap in ("memory:write", "net:outbound", "shell:exec", "system:admin"):
+        # Room notes (camera text) need their exact name, like a sensor.
+        for cap in (
+            "memory:read:room",
+            "memory:write",
+            "net:outbound",
+            "shell:exec",
+            "system:admin",
+        ):
             self.assertFalse(self.policy.check("room", cap, "t"), cap)
 
     def test_every_other_wildcard_grant_is_refused(self) -> None:

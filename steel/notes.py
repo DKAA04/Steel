@@ -11,8 +11,9 @@ from typing import Self
 
 # Where a note came from. "user": the user stored it (steel remember --days,
 # steel notes). "time_bound": the extractor found a short-lived fact in a chat
-# message. "room": a future sensor observation. Kept apart so that a policy can
-# later grant a tool the room notes without handing it the user's own notes.
+# message. "room": a camera description the owner saved (steel look --save). Kept
+# apart so a grant can give a tool the room notes without the owner's own notes,
+# or the other way round (memory:read:room and memory:read:notes).
 NOTE_SOURCES = ("user", "time_bound", "room")
 
 
@@ -129,13 +130,20 @@ class MemoryStore:
         self.close()
 
 
-def read_unexpired(path: Path, *, now: float | None = None) -> list[tuple[str, str]]:
-    """(id, text) of the unexpired notes in *path*, oldest first. Writes nothing.
+def read_unexpired(
+    path: Path,
+    *,
+    sources: tuple[str, ...] = NOTE_SOURCES,
+    now: float | None = None,
+) -> list[tuple[str, str]]:
+    """(id, text) of the unexpired notes of *sources* in *path*, oldest first.
 
-    ``MemoryStore`` deletes expired rows and may add a column when it opens a
-    database, so a read-only caller must not use it. This opens the file
-    read-only (SQLite refuses any write on the connection) and skips expired
-    rows instead of deleting them. A missing file has no notes.
+    Writes nothing. ``MemoryStore`` deletes expired rows and may add a column
+    when it opens a database, so a read-only caller must not use it. This opens
+    the file read-only (SQLite refuses any write on the connection) and skips
+    expired rows instead of deleting them. A missing file has no notes; in a
+    database older than the source column every row counts as "user", as
+    ``MemoryStore._migrate`` would label it.
     """
     if path.is_symlink():
         raise ValueError("Use a regular database path, not a symbolic link.")
@@ -143,10 +151,12 @@ def read_unexpired(path: Path, *, now: float | None = None) -> list[tuple[str, s
         return []
     db = sqlite3.connect(f"{path.resolve().as_uri()}?mode=ro", uri=True)
     try:
+        columns = [row[1] for row in db.execute("PRAGMA table_info(notes)")]
+        source = "source" if "source" in columns else "'user'"
         rows = db.execute(
-            "SELECT id, text FROM notes WHERE expires > ? ORDER BY rowid",
+            f"SELECT id, text, {source} FROM notes WHERE expires > ? ORDER BY rowid",
             (time.time() if now is None else now,),
         ).fetchall()
     finally:
         db.close()
-    return [(note_id, text) for note_id, text in rows]
+    return [(note_id, text) for note_id, text, kind in rows if kind in sources]

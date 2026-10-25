@@ -191,7 +191,10 @@ class PermissionTest(ToolCase):
         self,
     ) -> None:
         tools = {t.spec.name: t for t in get_memory_tools(self.home)}
-        self.assertEqual(set(tools), {"memory_search_facts", "memory_search_notes"})
+        self.assertEqual(
+            set(tools),
+            {"memory_search_facts", "memory_search_notes", "memory_search_room"},
+        )
         self.assertEqual(
             tools["memory_search_facts"].spec.required_capabilities,
             ["memory:read:facts"],
@@ -199,6 +202,10 @@ class PermissionTest(ToolCase):
         self.assertEqual(
             tools["memory_search_notes"].spec.required_capabilities,
             ["memory:read:notes"],
+        )
+        self.assertEqual(
+            tools["memory_search_room"].spec.required_capabilities,
+            ["memory:read:room"],
         )
         for tool in tools.values():
             self.assertFalse(tool.spec.requires_confirmation)
@@ -708,7 +715,7 @@ class CliToolListTest(ToolCase):
     def test_it_can_ask_about_an_agent_that_is_not_in_the_file(self) -> None:
         self.write_grants(FACTS_GRANT)
         out, _ = self.run_cli("tool", "list", "--agent", "kitchen")
-        self.assertEqual(out.count("agent kitchen: denied (unknown_agent)"), 2)
+        self.assertEqual(out.count("agent kitchen: denied (unknown_agent)"), 3)
 
     def test_an_invalid_grants_file_is_reported_and_everything_is_denied(self) -> None:
         self.write_grants(
@@ -716,7 +723,7 @@ class CliToolListTest(ToolCase):
         )
         out, _ = self.run_cli("tool", "list", "--agent", "cli")
         self.assertIn("INVALID", out)
-        self.assertEqual(out.count("agent cli: denied"), 2)
+        self.assertEqual(out.count("agent cli: denied"), 3)
 
     def test_it_never_writes_the_audit_log_or_anything_else(self) -> None:
         SteelMemory(self.home).remember("User likes green tea")
