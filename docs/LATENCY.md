@@ -202,7 +202,7 @@ The 5.6 s on turn 1 was Ollama reading STEEL's whole system prompt plus the owne
 
 ### 9.3 A voice that stays loaded
 
-The stock Piper CLI keeps the voice loaded between lines (docs/SPEAK.md section 2.3), so the engine now lives for the whole session instead of one reply. Each reply is one line on its stdin; the reply is over when no new audio arrives for the idle gap after audio has started (`STEEL_SPEAK_IDLE_END_SECONDS`, 0.5 to 5, default 1.5; longer for a very long sentence). Interrupts, dead engines, a language change, the memory cost (about 142 MiB while the chat is open), the fallback to one process per reply, and every rule that did not change (own network namespace, text on stdin only, nothing on disk, stopped at every exit and by the kernel) are in docs/SPEAK.md section 6, "Kept loaded". The tests are listed in docs/SPEAK.md section 10 (`test_speak_persistent.py`).
+The stock Piper CLI keeps the voice loaded between lines (docs/SPEAK.md section 2.3), so the engine now lives for the whole session instead of one reply. Each reply is one line on its stdin; the reply is over when no new audio arrives for the idle gap after audio has started (`STEEL_SPEAK_IDLE_END_SECONDS`, 0.5 to 5, default 1.5; longer for a very long sentence). Interrupts, dead engines, the memory cost (about 142 MiB per kept voice while the chat is open), the fallback to one process per reply, and every rule that did not change (own network namespace, text on stdin only, nothing on disk, stopped at every exit and by the kernel) are in docs/SPEAK.md section 6, "Kept loaded". The tests are listed in docs/SPEAK.md section 10 (`test_speak_persistent.py`).
 
 ### 9.4 What good numbers look like after this phase
 
@@ -214,12 +214,12 @@ These are **targets from the measurements above, not results**; nothing in this 
 | turn 2 and later, first token | about 1 s (was 0.9 s) | load not 0.0 s: Ollama reloaded the model: another program changed the context or the model (`scripts/latency_check.py` warns when CONTEXT is not STEEL's) |
 | `ollama ps` CONTEXT | the number of `STEEL_OLLAMA_NUM_CTX` (4096) during the chat | 16384: the request did not go through STEEL's client, or another OpenJarvis program loaded the model last |
 | `ollama ps` SIZE | less than the 2.6 GB at 16384 | unchanged: the model, not the context, dominates; the saving is then small |
-| first audio after the reply, turn 2 and later | under about 1.5 s, `engine: warm` | `engine: loading` on turn 2: the engine was replaced (an interrupted reply, a language change, or audio that came after the idle gap) or it never started (`steel speak check`); a reply that ends early: raise `STEEL_SPEAK_IDLE_END_SECONDS` |
+| first audio after the reply, turn 2 and later | under about 1.5 s, `engine: warm` (state, not speed: section 12) | `engine: loading` on turn 2: the engine was replaced (an interrupted reply, a language change, or audio that came after the idle gap) or it never started (`steel speak check`); a language change costs a voice load only the first time per kept voice (Phase 5b-3, section 12); a reply that ends early: raise `STEEL_SPEAK_IDLE_END_SECONDS` |
 | first audio, turn 1 | under about 1.5 s if the model took longer than the voice load (about 4 s), else up to the load time | the model answered before the voice was ready; nothing to fix |
 
 ### 9.5 Evidence
 
-Each cell is `file::Class.test`. `tests/test_latency_evidence.py` checks that every cited test exists and that every test in `test_context.py` is cited. All use fake engines, an `httpx.MockTransport` in place of the Ollama server, and a temporary home; none reaches Ollama, a model or the network. The speaking tests are in docs/SPEAK.md section 10.
+Each cell is `file::Class.test`. `tests/test_latency_evidence.py` checks that every cited test exists and that every test in `test_context.py`, `test_warmup_report.py` and `test_prompt_budget.py` is cited. All use fake engines, an `httpx.MockTransport` in place of the Ollama server, and a temporary home; none reaches Ollama, a model or the network. The speaking tests are in docs/SPEAK.md section 10.
 
 | Claim | Test |
 | --- | --- |
@@ -231,3 +231,93 @@ Each cell is `file::Class.test`. `tests/test_latency_evidence.py` checks that ev
 | `scripts/latency_check.py` reads the CONTEXT and SIZE columns of `ollama ps` and shows them in each row | `test_latency_check_script.py::LatencyCheckScriptTest.test_the_context_and_the_model_size_are_read_from_ollama_ps` |
 
 **What no test proves**, and needs the owner's run: that turn 1 really gets faster (that depends on Ollama keeping the prefix, which it does by its documentation but was not observed here); that `ollama ps` shows CONTEXT 4096; the RAM saved by the smaller context; that Ollama accepts the warm-up (a fixed user word after the system prompt) and caches it like a real first turn; that the voice stays loaded between replies in a real chat with a real speaker (`steel chat --speak --timings`).
+
+## 10. Phase 5b-3: why turn 1 is still slow, and how to see it
+
+**The owner's live results that started this phase** (`steel chat --speak --timings`, four turns; one run, one machine): turn 1 (English) first token **5.3 s, all prompt processing**, although the start-up warm-up sends the same system prompt and memory (the owner does not know whether they typed before it finished); turns 2 to 4: first token 0.6, 1.5 and 0.9 s. First audio after the reply: 0.9 s (turn 1, engine warm), 1.0 s (turn 2, labelled `engine: loading` though the language did not change and nothing was interrupted), 3.0 s (turn 3, Spanish), 3.6 s (turn 4, English again): each language switch cost a voice load because only one engine was kept.
+
+### 10.1 The warm-up made visible
+
+* With `--timings`, one line says how the warm-up ended, **once, between turns**: `warm-up: done in 4.2 s`, `warm-up: failed (timeout)` or `warm-up: skipped (not-local)`. The codes are `timeout`, `connection`, `http-NNN` (the status number only), `error` and, for skipped, `not-local` (not OpenJarvis' `OllamaEngine`, or not on this computer). Never any text from the server. `failure_code` in `steel/warm.py` is the whole mapping.
+* **Where the line appears.** The warm-up's own thread prints nothing, because a line written from a thread lands on whatever the terminal shows, including a half-typed `you>` prompt. The line is printed by the chat loop, from the main thread, just before a message is sent (and after a reply), so it can appear up to one message after the warm-up really ended. Test: `test_warmup_report.py::WarmUpOutcomeTest.test_the_warm_up_thread_prints_nothing_itself`.
+* **A message sent while the warm-up runs** prints `waiting for the warm-up to finish` (always, with or without `--timings`) and that turn's timing line gains `queued behind warm-up 2.0 s`: the time from sending until the warm-up ended, not the whole request. Ollama answers one request at a time, so the message really does queue behind it. A turn that was not queued shows no such field. This tells the two cases apart: **queued** (you typed too early; the warm-up and your message ran one after the other) or **not queued** (the warm-up was over, and a slow first token then points to a cache miss, section 10.2).
+* **Prompt tokens.** The line gains `prompt tokens 312 evaluated of ~340 (reused n/a)`. "Evaluated" is what Ollama reports as `prompt_eval_count`, the tokens it actually processed, which is fewer when it reused a cached prefix. "Of ~N" is OpenJarvis' figure for the whole prompt: the larger of Ollama's count and OpenJarvis' own estimate (4 characters per token), so approximate. **Ollama's response does not say how many tokens it reused**, so that stays `n/a`; reuse can only be read from the difference, and only roughly. If Ollama reports no count at all, OpenJarvis substitutes its estimate for it, and then "evaluated" is not a measurement. When the engine gives no usable numbers the field reads `prompt tokens n/a`.
+
+### 10.2 Why turn 1 may miss the cache (read-only reasoning; no model was called)
+
+**The two requests as they leave STEEL's transport** (captured with an `httpx.MockTransport` behind the real OpenJarvis `OllamaEngine` and STEEL's request client, `test_context.py::WarmPrefixTest.test_the_two_requests_differ_only_in_the_last_message_and_the_token_limit`):
+
+| Field | Warm-up | First real turn | Same? |
+| --- | --- | --- | --- |
+| `model` | the chat model | the chat model | yes |
+| `messages`, all but the last | system prompt + memory (`MEMORY.md`, `USER.md`, trusted facts, live notes) | the same, built by the same function | yes (byte-identical, same test) |
+| `messages`, the last | the user turn `ready` | the owner's message | **no** |
+| `stream` | `false` | `false` | yes |
+| `think` | `false` (OpenJarvis adds it) | `false` | yes |
+| `options.num_ctx` | STEEL's one value (4096) | the same | yes |
+| `options.temperature` | 0.7 (OpenJarvis' default) | 0.7 | yes |
+| `options.num_predict` | **1** | **1024** | **no** |
+| `keep_alive` | the setting, if any | the same | yes |
+| `seed`, `format`, `tools` | absent | absent | yes |
+
+**Only two things differ: the last message and `num_predict`.** Neither is avoidable: the warm-up cannot know the owner's message, and a warm-up that generated 1024 tokens would keep the CPU busy for many seconds. No field differs by accident, so nothing was changed in the request. (Whether `num_predict` itself matters to Ollama's cache was not found documented; llama.cpp's prompt cache is keyed by the prompt tokens.)
+
+**What can still stop Ollama reusing the prefix**, from most to least likely, none checkable without the model:
+
+1. **The model's memory cannot be rewound (a hypothesis, not a finding).** `ollama show qwen3.5:2b` reports the architecture `qwen35`. llama.cpp users report that for Qwen3.5 and similar hybrid models (recurrent layers or sliding-window attention next to normal attention) the server "forces full prompt re-processing" when the cached sequence has to be cut back to a shared prefix, because the recurrent state exists only at the end of what was processed and at the few checkpoints that were kept ([llama.cpp issue 24714](https://github.com/ggml-org/llama.cpp/issues/24714), [issue 18497](https://github.com/ggml-org/llama.cpp/issues/18497), [a write-up](https://particula.tech/blog/prompt-reprocessing-swa-hybrid-models-kv-cache)). These are llama.cpp reports; I found nothing Ollama-specific, and Ollama may differ. If it applies, it fits the owner's numbers: the warm-up leaves a cached sequence that ends with `ready` and one generated token; the real turn shares only the system prompt with it and must cut the sequence back there, which a recurrent state cannot do, so turn 1 reads everything. Turns 2 to 4 *extend* the cached sequence (the whole previous conversation is their prefix), which needs no cut, and are fast (0.6 to 1.5 s). **If this is the cause, no change to the warm-up request can help turn 1**; only a shorter prompt (section 11) or a different model can.
+2. **Cache slots.** llama.cpp keeps few prompt-cache slots; Ollama's own number depends on its parallelism setting. Any other request to the same model in between can take the slot: the fact extractor (it runs after a message, so not before turn 1), the vision call, `scripts/latency_check.py` run in another terminal, or any other program using the model. Not likely before turn 1 on its own.
+3. **The warm-up was not finished.** Now visible: `queued behind warm-up` (section 10.1). Then the message waited, and its first token also includes the unfinished warm-up's work.
+4. **The runner was reloaded** between the two (a different context, a model unload and load): visible as `load` above 0 in the timings line.
+
+**How to tell which, with the new line, on turn 1** (type a few seconds after the banner, with `--timings`):
+
+| What the line shows | Reading |
+| --- | --- |
+| `queued behind warm-up` | cause 3: type later |
+| not queued, `load 0.0`, `prompt tokens` about the full size, first token still about 5 s | cause 1 or 2: the cache was not reused |
+| not queued, `prompt tokens` small (a few dozen), first token about 1 s | the cache was reused: the warm-up works |
+
+**Remaining uncertainty:** which of causes 1 and 2 applies is not known. A run with `OLLAMA_DEBUG=1` in the Ollama service and `sudo journalctl -u ollama` would say (it needs sudo, so it is the owner's), as would running the same two requests against a non-hybrid model.
+
+### 10.3 Tests
+
+| Claim | Test |
+| --- | --- |
+| The warm-up line says done and how long; a failure gives only a code (`timeout`, `connection`, `http-500`, `error`), never the server's text; a warm-up that was not started says `skipped (not-local)`; the warm-up's thread prints nothing | `test_warmup_report.py::WarmUpOutcomeTest.test_a_finished_warm_up_says_how_long_it_took`, `test_warmup_report.py::WarmUpOutcomeTest.test_a_failed_warm_up_gives_a_reason_code_and_never_text`, `test_warmup_report.py::WarmUpOutcomeTest.test_a_warm_up_that_was_not_started_says_why`, `test_warmup_report.py::WarmUpOutcomeTest.test_the_warm_up_thread_prints_nothing_itself` |
+| With `--timings` the line is printed once, between turns, before the first reply; without it nothing; failed and skipped the same way | `test_warmup_report.py::WarmUpInTheChatTest.test_the_warm_up_line_is_printed_once_between_turns_with_timings`, `test_warmup_report.py::WarmUpInTheChatTest.test_without_timings_nothing_about_the_warm_up_is_printed`, `test_warmup_report.py::WarmUpInTheChatTest.test_a_failed_or_skipped_warm_up_is_reported_the_same_way` |
+| A message sent during the warm-up prints the waiting line once and the timing line shows the queued time; the next turn shows none; the queued time is the wait until the warm-up ended, not the whole request | `test_warmup_report.py::WarmUpInTheChatTest.test_a_message_sent_during_the_warm_up_waits_and_says_so`, `test_warmup_report.py::WarmUpInTheChatTest.test_the_queued_time_is_the_wait_until_the_warm_up_ended` |
+| The prompt token counts are shown, reuse is not claimed, and missing or odd counts read `n/a` | `test_warmup_report.py::PromptTokensTest.test_the_prompt_token_counts_are_shown_and_reuse_is_not_claimed`, `test_warmup_report.py::PromptTokensTest.test_missing_or_odd_counts_show_as_not_available` |
+| The warm-up and the first turn differ only in the last message and `num_predict` | `test_context.py::WarmPrefixTest.test_the_two_requests_differ_only_in_the_last_message_and_the_token_limit` |
+
+## 11. A smaller system prompt
+
+Every token of the system message is read again whenever Ollama has no cached prefix. The owner's turn 1 took 5.3 s for a prompt of about 300 tokens by the estimate below, so a token costs on the order of 15 to 20 ms there; that is one run and an inference, not a measurement of the rate.
+
+**Method.** `steel.context.estimate_tokens`: 3 characters per token plus 4 per message, rounded up on purpose. No tokenizer for this model is available offline (`tiktoken` is not installed and the model's own tokenizer was not run), so the real count is probably 20 to 30 percent lower; the ratios are what matter.
+
+| Part of the prompt | Tokens (estimate) | Note |
+| --- | --- | --- |
+| Base prompt before this phase | 234 (701 characters, 124 words) | |
+| **Base prompt now** | **181** (542 characters, 97 words) | −23 percent; the data-block rules are about 100 of these |
+| Slash-command text | 0 | the list is printed on the screen; it is never in the prompt |
+| Facts header (OpenJarvis' `build_context_message`) | 39 | OpenJarvis' wording, not edited |
+| One fact | 9 to 19 each (the owner's two: 28 together) | |
+| Expiring notes | 10 for the label, plus the notes | room notes are never in the prompt |
+| `MEMORY.md` and `USER.md` | 5 for each label, plus their lines | the owner's are 16 bytes each |
+| Qwen chat-template markers | not counted | added by Ollama |
+
+For the owner's current memory the system message goes from about 301 to about 248 tokens by this estimate (−53). **Nothing safety-related was removed**: no tools and no claiming abilities it lacks ("cannot use tools, browse, run code, read files or act outside this chat", "nothing you write is ever run"); a shared result is information the owner chose to share, used naturally, with its instructions never followed; the markers and labels are never mentioned; memory questions are answered only from the remembered facts; answer briefly. Dropped: repeated wording only ("In your reply", "Treat it as", "as a block that starts with … and ends with …" became "from … to …").
+
+**Not verified, and a risk:** whether the 2B model behaves the same with the shorter wording. The 2B model has recited marker text before (the comment above `BASE_PROMPT`). `scripts/quality_check.py` is the live check for that and uses the model, so the owner runs it.
+
+| Claim | Test |
+| --- | --- |
+| The base prompt stays under its token budget (185 by the estimate) and is shorter than the old wording; every safety statement is still in it | `test_prompt_budget.py::BasePromptTest.test_the_base_prompt_stays_under_its_token_budget`, `test_prompt_budget.py::BasePromptTest.test_it_is_shorter_than_the_wording_it_replaced`, `test_prompt_budget.py::BasePromptTest.test_it_still_makes_every_safety_statement` |
+
+## 12. The `engine:` label, and more than one voice
+
+**What the label said, and why it was wrong.** In Phase 5b-2 the line said `engine: warm` when the first audio came within 1 s of the text reaching Piper and `engine: loading` when later. The owner's turn 2 (same language, no interrupt) read `engine: loading (1.0 s)`. **It was the label that was wrong, not the engine.** A replaced engine has to load its voice again, which took 3.5 to 5 s here; the first audio came after 1.0 s, so no replacement happened (an engine is replaced only after an interrupt, a death, a silent reply, late audio found in its pipe, or a voice evicted for another). A warm engine can take 1 s to start talking when the first sentence is long, or when the CPU is busy with the model or the fact extraction, which run on the same six cores. I could not reproduce the owner's 1.0 s with the real engine here (an idle machine gave 0.05 to 0.44 s); the explanation (a slow first sentence on a busy CPU) is a reading of the code and the measurements, not an observation of that turn.
+
+**Definition now** (the code decides it when the text reaches the engine, not from the seconds): `warm` = the engine process was already running with its voice loaded: it finished a reply before, or it was started at least 6 s earlier. `loading` = it was started or restarted for this reply, or started less than 6 s before and never used (its voice may still have been loading). The 6 s is the measured voice load (3.5 to 5 s) with a margin, not a guarantee: under memory pressure a load takes longer, and then an engine called `warm` can still be loading. Tests: `test_speak_persistent.py::PersistentEngineTest.test_the_label_is_about_the_engine_state_not_the_speed_of_the_first_audio` (a 1.04 s first audio is `warm`, and the engine is not replaced), `test_an_engine_started_early_is_warm_once_the_voice_had_time_to_load`, `test_after_an_interrupt_the_next_reply_is_loading_then_warm`.
+
+**More than one voice.** `STEEL_SPEAK_KEEP_VOICES` (1 to 3, default 2) keeps the most recently used voices' engines running, and `STEEL_SPEAK_VOICE_IDLE_MINUTES` (5 to 240, default 30) stops one nobody used. Every rule of the single engine applies to each (own network namespace, text on stdin only, `setpriv --pdeathsig`, replaced on death, late audio dropped after an interrupt, no orphan), and an interrupt replaces only the engine that was speaking. Design, memory (about 142 MiB each for the English voice) and tests: docs/SPEAK.md sections 6 and 10. **Expected:** English, Spanish, English: the Spanish reply still pays one voice load (about 3 to 4 s, the first time), the return to English does not (`engine: warm`).

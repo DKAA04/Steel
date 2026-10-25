@@ -206,8 +206,9 @@ sequenceDiagram
 | --- | --- |
 | `steel/timings.py` | `--timings`: Ollama's durations and STEEL's clock to one line of numbers |
 | `steel/warm.py` | The warm-up request (the first turn's prefix), `STEEL_OLLAMA_KEEP_ALIVE` and `STEEL_OLLAMA_NUM_CTX` (a transport that sets `num_ctx` on every request and adds `keep_alive`), for a local `OllamaEngine` only |
+| `steel/warm.py` (`WarmUp`) | Also the warm-up's outcome (status and a reason code, never text) for `--timings` and the "waiting" notice |
 | `steel/context.py` | Cuts the oldest history so the prompt fits in `num_ctx` minus the reply reserve |
-| `steel/speak/synth.py` | Also: one long-lived engine per session (one voice at a time): `prepare` starts it early, `start` writes the reply as one line and returns a run that ends by the idle gap, `_release` keeps a clean engine and replaces any other, `close`; the process-per-reply way as fallback; `setpriv --pdeathsig KILL` |
+| `steel/speak/synth.py` | Also: the long-lived engines of the last `STEEL_SPEAK_KEEP_VOICES` voices used (least recently used stopped, idle ones stopped after `STEEL_SPEAK_VOICE_IDLE_MINUTES`): `prepare` starts the voice's engine early, `start` writes the reply as one line and returns a run that ends by the idle gap, `_release` keeps a clean engine and replaces any other, `close`; the process-per-reply way as fallback; `setpriv --pdeathsig KILL` |
 | `scripts/latency_check.py` | The owner's measurement: cold and warm prompts through `open_session`, Ollama's numbers, `ollama ps` PROCESSOR |
 | `docs/LATENCY.md` | The measurement plan (written first), findings (GPU, streaming, Piper), the fixes and their tests |
 

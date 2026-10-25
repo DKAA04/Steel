@@ -293,6 +293,22 @@ class PersistentEngineTest(unittest.TestCase):
         self.popen.processes[0].kill.assert_called_once_with()
         self.popen.processes[1].kill.assert_not_called()
 
+    def test_the_background_timer_stops_an_unused_engine_by_itself(self) -> None:
+        engine = PiperEngine(
+            self.directory,
+            popen=self.popen,
+            which=self.tools.get,
+            voice_idle_seconds=0.2,  # real clock and the real timer thread
+        )
+        self.addCleanup(engine.close)
+        engine.prepare(self.en)
+        self.assertEqual(engine.voices_running, [self.en])
+        deadline = time.monotonic() + 5
+        while engine.voices_running and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(engine.voices_running, [])
+        self.popen.processes[0].kill.assert_called_once_with()
+
     def test_a_voice_that_is_speaking_is_not_stopped_by_the_idle_limit(self) -> None:
         self.say("Hello.", self.en)  # still being spoken: never released
         self.clock.now += 3 * 3600
