@@ -41,6 +41,7 @@ from openjarvis.core.types import ToolCall
 from steel.home import POLICY_FILE, steel_home
 from steel.security import load_home_policy
 from steel.security.executor import build_executor
+from steel.speak.config import speak_config
 from steel.speak.playback import CHUNK_BYTES
 from steel.speak.synth import PiperEngine, Synthesizer, engine_dir
 from steel.speak.voices import voice_dir, voice_for
@@ -102,7 +103,10 @@ def main(
     *, home: Path | None = None, engine: Synthesizer | None = None, tool: Any = None
 ) -> int:
     home = home or steel_home()  # read only: voices
-    engine = engine or PiperEngine(engine_dir())
+    config = speak_config()
+    engine = engine or PiperEngine(
+        engine_dir(), idle_end=config.idle_end_seconds, persistent=config.persistent
+    )
     scratch = Path(tempfile.mkdtemp(prefix="steel-speak-check-"))
     try:
         (scratch / POLICY_FILE).write_text(json.dumps(GRANT))

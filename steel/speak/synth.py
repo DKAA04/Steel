@@ -7,25 +7,34 @@ loopback that is down), writes the text to its standard input and reads raw
 line or in the environment, so ``ps`` cannot show it. Without ``unshare`` the
 engine is not started at all.
 
-Loading a voice takes about 4 s, so the engine can be started EARLY
-(``prepare``), before the reply exists: it loads the voice and waits on its
-standard input, and ``start`` then only writes the text and closes stdin. One
-process still speaks one reply, so the end of its output is the end of the
-reply (the stock CLI marks no end between lines; docs/LATENCY.md section 5).
-A waiting engine is stopped by ``close``, at exit, and by the kernel if STEEL
-itself dies (``setpriv --pdeathsig``); its stdin also reaches end of file
-then, which makes Piper exit.
+Loading a voice takes about 4 s, so ONE engine per voice stays running for the
+session (docs/SPEAK.md section 6, "Kept loaded"): it loads the voice once and
+waits on its standard input. Each reply is written to it as one line. Piper's
+raw output marks no end between lines, so the end of a reply is an idle gap: no
+new audio bytes for ``idle_end`` seconds after audio has started (synthesis is
+about 14 times faster than playback). An interrupted reply is dropped by
+replacing the engine with a clean one, never by draining it, so stale audio can
+never play in the next reply. With ``persistent=False``, or if the long-lived
+engine fails, the old way is used: one process per reply, whose end of file is
+the end of the reply.
+
+Every engine is stopped by ``close``, at exit, and by the kernel if STEEL itself
+dies (``setpriv --pdeathsig``); its stdin also reaches end of file then, which
+makes Piper exit.
 """
 
 from __future__ import annotations
 
 import atexit
 import os
+import re
 import select
 import shutil
 import subprocess
 import threading
+import time
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
 
@@ -41,6 +50,20 @@ ISOLATION = ("--net", "--map-root-user", "--")
 # (checked on the owner's machine, 2026-10-25).
 DEATH_SIGNAL = ("--pdeathsig", "KILL", "--")
 _KILL_WAIT = 2.0
+# How long to wait for the FIRST audio of a reply: the voice may still be
+# loading (4 s here, much more under memory pressure), but a stuck engine must
+# not keep the owner waiting for ever.
+FIRST_AUDIO_WAIT = 45.0
+# Seconds of silence after a reply's last audio that count as its end, at least;
+# a long sentence needs longer (see ``idle_gap``).
+DEFAULT_IDLE_END = 1.5
+# Synthesis takes about 0.07 s per second of speech (measured); one second of
+# speech is about 15 characters. So a sentence of N characters needs about
+# N * 0.005 s; the gap is twice that, to be safe.
+_GAP_PER_CHAR = 0.01
+_SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
+# The engine counts as "warm" if the first audio came this soon after the text.
+WARM_FIRST_AUDIO = 1.0
 
 
 class EngineUnavailable(RuntimeError):
@@ -103,6 +126,9 @@ class EngineRun(Protocol):
 
     def stop(self) -> None: ...
 
+    # Also on every run: ``died`` (the engine exited mid-reply) and
+    # ``engine_seconds`` (text sent to first audio); read with getattr.
+
 
 class Synthesizer(Protocol):
     def start(self, text: str, model: Path) -> EngineRun: ...
@@ -112,7 +138,18 @@ class Synthesizer(Protocol):
     def close(self) -> None: ...
 
 
+def idle_gap(text: str, setting: float) -> float:
+    """Silence that ends a reply: *setting*, or more for a very long sentence."""
+    longest = max((len(part) for part in _SENTENCE_END.split(text)), default=0)
+    return max(setting, longest * _GAP_PER_CHAR)
+
+
 class PiperRun:
+    """A reply from a process made for it: its end of file is the end."""
+
+    died = False
+    engine_seconds: float | None = None
+
     def __init__(self, process: Any) -> None:
         self._process = process
 
@@ -134,6 +171,76 @@ class PiperRun:
             self._process.stdout.close()
 
 
+@dataclass
+class _Engine:
+    """A running engine: its process, its voice, and what it has done."""
+
+    process: Any
+    model: Path
+    served: int = 0  # replies it has finished cleanly
+
+
+class PersistentRun:
+    """One reply from a long-lived engine. Its output never ends, so the end is
+    an idle gap after the last audio byte (docs/SPEAK.md section 6)."""
+
+    died = False  # the engine exited before the reply was over
+
+    def __init__(
+        self,
+        owner: PiperEngine,
+        engine: _Engine,
+        *,
+        idle_end: float,
+        clock: Callable[[], float],
+    ) -> None:
+        self._owner = owner
+        self._engine = engine
+        self._idle_end = idle_end
+        self._clock = clock
+        self._sent = self._last = clock()
+        self._heard = False  # any audio yet
+        self._ended = False
+        self.engine_seconds: float | None = None
+
+    @property
+    def clean(self) -> bool:
+        """The reply ended by silence after audio: the engine holds nothing."""
+        return self._ended and self._heard and not self.died
+
+    def readable(self, timeout: float) -> bool:
+        if self._ended:
+            return True
+        process = self._engine.process
+        ready, _, _ = select.select([process.stdout], [], [], timeout)
+        if ready:
+            return True
+        if process.poll() is not None:
+            self.died = self._ended = True
+            return True
+        limit = self._idle_end if self._heard else FIRST_AUDIO_WAIT
+        if self._clock() - self._last >= limit:
+            self._ended = True  # silence: this reply is finished
+            return True
+        return False
+
+    def read_into(self, buffer: memoryview) -> int:
+        if self._ended:
+            return 0
+        count = int(self._engine.process.stdout.readinto(buffer) or 0)
+        if count == 0:  # end of file: the engine exited
+            self.died = self._ended = True
+            return 0
+        self._last = self._clock()
+        if not self._heard:
+            self._heard = True
+            self.engine_seconds = self._last - self._sent
+        return count
+
+    def stop(self) -> None:
+        self._owner._release(self)
+
+
 class PiperEngine:
     def __init__(
         self,
@@ -141,12 +248,18 @@ class PiperEngine:
         *,
         popen: Callable[..., Any] = subprocess.Popen,
         which: Callable[[str], str | None] = shutil.which,
+        idle_end: float = DEFAULT_IDLE_END,
+        persistent: bool = True,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._directory = directory
         self._popen = popen
         self._which = which
+        self._idle_end = idle_end
+        self._persistent = persistent
+        self._clock = clock
         self._lock = threading.Lock()
-        self._waiting: tuple[Any, Path] | None = None  # (process, model)
+        self._current: _Engine | None = None
         self._atexit = False
 
     def _spawn(self, model: Path) -> Any:
@@ -177,65 +290,148 @@ class PiperEngine:
         except OSError as exc:
             raise EngineUnavailable("the speech engine could not be started") from exc
 
-    def _feed(self, process: Any, text: str) -> PiperRun:
+    @staticmethod
+    def _write(process: Any, text: str, *, last: bool) -> None:
+        """One line: Piper speaks each input line separately. *last* closes
+        stdin, which ends a one-reply process."""
         try:
-            # One line: Piper speaks each input line separately.
             process.stdin.write(" ".join(text.split()).encode("utf-8") + b"\n")
-            process.stdin.close()
-        except OSError as exc:
+            if last:
+                process.stdin.close()
+        except (OSError, ValueError) as exc:
             PiperRun(process).stop()
             raise EngineUnavailable("the speech engine stopped at once") from exc
-        return PiperRun(process)
 
-    def prepare(self, model: Path) -> bool:
-        """Start the engine for *model* now, so the voice loads before the reply.
+    @staticmethod
+    def _has_unread_audio(process: Any) -> bool:
+        """Audio nobody asked for: left over from an earlier reply."""
+        ready, _, _ = select.select([process.stdout], [], [], 0)
+        return bool(ready)
 
-        Whether one is waiting. A waiting engine for another voice is stopped.
-        """
-        with self._lock:
-            if self._waiting is not None:
-                process, waiting_for = self._waiting
-                if waiting_for == model and process.poll() is None:
-                    return True
-                self._discard()
-            try:
-                process = self._spawn(model)
-            except EngineUnavailable:
-                return False
-            self._waiting = (process, model)
-            if not self._atexit:
-                atexit.register(self.close)  # no engine outlives a normal exit
-                self._atexit = True
-            return True
+    def _register_exit(self) -> None:
+        if not self._atexit:
+            atexit.register(self.close)  # no engine outlives a normal exit
+            self._atexit = True
 
-    def start(self, text: str, model: Path) -> PiperRun:
-        with self._lock:
-            process = None
-            if self._waiting is not None:
-                waiting, waiting_for = self._waiting
-                self._waiting = None
-                if waiting_for == model and waiting.poll() is None:
-                    process = waiting
-                else:  # another voice, or it died: not used
-                    PiperRun(waiting).stop()
-        if process is not None:
-            try:
-                return self._feed(process, text)
-            except EngineUnavailable:
-                pass  # it died just now: start a fresh one below
-        return self._feed(self._spawn(model), text)
-
-    def close(self) -> None:
-        """Stop a waiting engine, if any."""
-        with self._lock:
-            self._discard()
-
-    def _discard(self) -> None:
-        if self._waiting is not None:
-            process, _model = self._waiting
-            self._waiting = None
+    def _stop_current(self) -> None:
+        """Stop the engine, if any. Caller holds the lock."""
+        if self._current is not None:
+            process = self._current.process
+            self._current = None
             try:
                 process.stdin.close()
             except (OSError, ValueError):
                 pass
             PiperRun(process).stop()
+
+    def _start_current(self, model: Path) -> _Engine:
+        """A new long-lived engine for *model*. Caller holds the lock."""
+        engine = _Engine(self._spawn(model), model)
+        self._current = engine
+        self._register_exit()
+        return engine
+
+    def prepare(self, model: Path) -> bool:
+        """Have an engine for *model* loading (or loaded) now, so the voice is
+        ready before the reply exists. A different voice's engine is stopped.
+
+        Whether one is waiting.
+        """
+        with self._lock:
+            engine = self._current
+            if (
+                engine is not None
+                and engine.model == model
+                and engine.process.poll() is None
+            ):
+                return True
+            self._stop_current()
+            try:
+                self._start_current(model)
+            except EngineUnavailable:
+                return False
+            return True
+
+    def start(self, text: str, model: Path) -> PiperRun | PersistentRun:
+        """Speak *text* with the engine for *model* (see the module docstring)."""
+        if self._persistent:
+            run = self._start_persistent(text, model)
+            if run is not None:
+                return run
+        return self._start_one_shot(text, model)
+
+    def _start_one_shot(self, text: str, model: Path) -> PiperRun:
+        """The old way, also the fallback: a process for this reply alone. A
+        prepared engine for this voice is used; stdin closes after the text."""
+        with self._lock:
+            engine, self._current = self._current, None
+            process = None
+            if engine is not None:
+                if engine.model == model and engine.process.poll() is None:
+                    process = engine.process
+                else:  # another voice, or it died: not used
+                    PiperRun(engine.process).stop()
+        if process is not None:
+            try:
+                self._write(process, text, last=True)
+                return PiperRun(process)
+            except EngineUnavailable:
+                pass  # it died just now: start a fresh one below
+        process = self._spawn(model)
+        self._write(process, text, last=True)
+        return PiperRun(process)
+
+    def _start_persistent(self, text: str, model: Path) -> PersistentRun | None:
+        """The reply on the long-lived engine, or None if that failed."""
+        with self._lock:
+            engine = self._current
+            usable = (
+                engine is not None
+                and engine.model == model
+                and engine.process.poll() is None
+                # Audio waiting in the pipe belongs to an earlier reply (it
+                # arrived after its idle gap). It cannot be told apart from the
+                # new reply's, so the engine is replaced.
+                and not self._has_unread_audio(engine.process)
+            )
+            if not usable:
+                self._stop_current()
+                try:
+                    engine = self._start_current(model)
+                except EngineUnavailable:
+                    return None
+            assert engine is not None
+        try:
+            self._write(engine.process, text, last=False)
+        except EngineUnavailable:
+            with self._lock:
+                if self._current is engine:
+                    self._current = None
+            return None
+        return PersistentRun(
+            self, engine, idle_end=idle_gap(text, self._idle_end), clock=self._clock
+        )
+
+    def _release(self, run: PersistentRun) -> None:
+        """The reply is over. A clean engine stays loaded for the next reply; any
+        other (interrupted, died, silent) is replaced by a new one, which loads
+        in the background while the owner reads, so the next reply is not slow
+        and no stale audio can reach it."""
+        with self._lock:
+            engine = run._engine
+            if self._current is not engine:
+                PiperRun(engine.process).stop()  # closed meanwhile (exit, voice change)
+                return
+            if run.clean:
+                engine.served += 1
+                return
+            self._stop_current()
+            try:
+                self._start_current(engine.model)
+            except EngineUnavailable:
+                pass  # the next reply reports it
+
+    def close(self) -> None:
+        """Stop the engine, if any."""
+        with self._lock:
+            self._stop_current()

@@ -166,22 +166,33 @@ class Speak(BaseTool):
             self._busy.release()
         if done.reason == "no_audio":
             return self._failed("Not spoken: the speech engine produced no sound.")
+        died = bool(getattr(run, "died", False))
+        engine_seconds = getattr(run, "engine_seconds", None)
         words = {
             "finished": "Spoken",
             "key": "Stopped",
             "cancelled": "Stopped",
             "limit": "Stopped at the time limit",
         }
+        content = f"{words[done.reason]} ({voice.language}, {done.seconds:.1f} s)."
+        if died:
+            # One line; the engine is replaced and loads while the owner reads.
+            content = f"Stopped ({voice.language}, {done.seconds:.1f} s): the speech engine stopped; it restarts."
         return ToolResult(
             tool_name=SPEAK_TOOL,
-            content=f"{words[done.reason]} ({voice.language}, {done.seconds:.1f} s).",
+            content=content,
             metadata={
                 "language": voice.language,
                 "voice": voice.name,
                 "seconds": round(done.seconds, 1),
-                "stopped_by": done.reason,
+                "stopped_by": "engine" if died else done.reason,
                 "cut": speech.cut,
                 # For --timings: a number only, never the text.
+                "engine_seconds": (
+                    round(engine_seconds, 3)
+                    if isinstance(engine_seconds, (int, float))
+                    else None
+                ),
                 "first_audio_seconds": (
                     None
                     if done.first_audio_at is None

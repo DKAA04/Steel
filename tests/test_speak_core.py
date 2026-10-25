@@ -16,6 +16,7 @@ import tempfile
 import threading
 import time
 import unittest
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -61,12 +62,23 @@ class FakePopen:
         self.calls = []
         self.stdin_data = bytearray()
         self.processes: list[Any] = []
-        self.broken_pipe = False  # the next process dies as text is written
+        self.broken_pipes = 0  # the next N processes die as text is written
+        self.audio: list[Any] = []  # the engine's end of each stdout pipe
+        # Called with (process index, bytes) after text was written to a process.
+        self.on_write: Callable[[int, bytes], None] | None = None
+
+    def close_pipes(self) -> None:
+        for process in self.processes:
+            process.stdout.close()
+        for writer in self.audio:
+            writer.close()
 
     def __call__(self, argv: list[str], **kwargs: Any) -> Any:
         self.calls.append({"argv": list(argv), **kwargs})
         owner = self
-        broken, self.broken_pipe = self.broken_pipe, False
+        index = len(self.processes)
+        broken = self.broken_pipes > 0
+        self.broken_pipes = max(0, self.broken_pipes - 1)
 
         class Stdin:
             closed = False
@@ -79,6 +91,8 @@ class FakePopen:
                     raise BrokenPipeError
                 owner.stdin_data += data
                 self.data += data
+                if owner.on_write is not None:
+                    owner.on_write(index, data)
                 return len(data)
 
             def close(self) -> None:
@@ -87,6 +101,10 @@ class FakePopen:
         process = mock.Mock()
         process.stdin = Stdin()
         process.poll.return_value = None
+        # A real pipe, so select() works; the test writes "audio" into it.
+        read_end, write_end = os.pipe()
+        process.stdout = os.fdopen(read_end, "rb", buffering=0)
+        self.audio.append(os.fdopen(write_end, "wb", buffering=0))
         self.processes.append(process)
         return process
 
@@ -154,6 +172,7 @@ class EngineTest(unittest.TestCase):
         (self.directory / "bin").mkdir(parents=True)
         (self.directory / "bin" / "python").write_text("")
         self.popen = FakePopen()
+        self.addCleanup(self.popen.close_pipes)
         self.model = Path("/models/en_US-john-medium.onnx")
 
     def engine(self, unshare: str | None = "/usr/bin/unshare") -> PiperEngine:
@@ -244,6 +263,7 @@ class EarlyStartTest(unittest.TestCase):
         (self.directory / "bin").mkdir(parents=True)
         (self.directory / "bin" / "python").write_text("")
         self.popen = FakePopen()
+        self.addCleanup(self.popen.close_pipes)
         self.en = Path("/models/en_US-john-medium.onnx")
         self.es = Path("/models/es_ES-carlfm-x_low.onnx")
         self.tools = {"unshare": "/usr/bin/unshare", "setpriv": "/usr/bin/setpriv"}
@@ -262,7 +282,8 @@ class EarlyStartTest(unittest.TestCase):
         engine.start(SECRET, self.en)
         self.assertEqual(len(self.popen.processes), 1)  # no second engine
         self.assertEqual(process.stdin.data, (SECRET + "\n").encode())
-        self.assertTrue(process.stdin.closed)  # end of file: the end of the reply
+        # It stays open: the engine is kept loaded for the next reply.
+        self.assertFalse(process.stdin.closed)
         for call in self.popen.calls:
             self.assertFalse(any("4711" in part for part in call["argv"]))
 
@@ -314,25 +335,27 @@ class EarlyStartTest(unittest.TestCase):
         self.assertEqual(crashed.stdin.data, b"")
         self.assertEqual(self.popen.processes[1].stdin.data, b"Hello.\n")
         # And a crash while waiting is also noticed by the next prepare.
+        self.popen.processes[1].poll.return_value = 1
         engine.prepare(self.en)
-        self.popen.processes[2].poll.return_value = 1
-        engine.prepare(self.en)
-        self.assertEqual(len(self.popen.processes), 4)
-        self.popen.processes[2].wait.assert_called()  # the dead one is reaped
+        self.assertEqual(len(self.popen.processes), 3)
+        self.popen.processes[1].wait.assert_called()  # the dead one is reaped
 
     def test_an_engine_that_dies_as_the_text_arrives_is_replaced_once(self) -> None:
         engine = self.engine()
-        self.popen.broken_pipe = True
+        self.popen.broken_pipes = 1
         engine.prepare(self.en)
         engine.start("Hello.", self.en)
         dead, fresh = self.popen.processes
         dead.kill.assert_called()
+        # The fallback is a process for this reply alone: stdin closes after it.
         self.assertEqual(fresh.stdin.data, b"Hello.\n")
-        # A fresh engine that dies too is an error, not a loop.
-        self.popen.broken_pipe = True
+        self.assertTrue(fresh.stdin.closed)
+        # Engines that die too are an error, not a loop: one long-lived attempt
+        # and one fallback, then the error.
+        self.popen.broken_pipes = 2
         with self.assertRaises(EngineUnavailable):
             engine.start("Hello.", self.en)
-        self.assertEqual(len(self.popen.processes), 3)
+        self.assertEqual(len(self.popen.processes), 4)
 
     def test_close_stops_the_waiting_engine_and_the_next_reply_starts_fresh(
         self,
@@ -458,6 +481,7 @@ class NoOrphanTest(unittest.TestCase):
 class SinkTest(unittest.TestCase):
     def setUp(self) -> None:
         self.popen = FakePopen()
+        self.addCleanup(self.popen.close_pipes)
         self.sink = AplaySink(popen=self.popen, which=lambda _n: "/usr/bin/aplay")
         self.shown = SpeakingIndicator(FakeTTY()).show()
 

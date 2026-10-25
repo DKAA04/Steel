@@ -157,10 +157,16 @@ def get_speak_tool(
     from steel.speak.player import AplaySink
     from steel.speak.synth import PiperEngine, engine_dir
 
+    config = config or speak_config()
     return Speak(
         home=home,
-        config=config or speak_config(),
-        engine=engine or PiperEngine(engine_dir()),
+        config=config,
+        engine=engine
+        or PiperEngine(
+            engine_dir(),
+            idle_end=config.idle_end_seconds,
+            persistent=config.persistent,
+        ),
         open_sink=open_sink or AplaySink,
         indicator=indicator or SpeakingIndicator(),
         keys=keys or TypedLineStop(),

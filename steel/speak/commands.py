@@ -107,7 +107,10 @@ class ChatSpeaker:
             self.last_timing = SpeechTiming(
                 first_audio=first if isinstance(first, (int, float)) else None,
                 played=float(result.metadata.get("seconds", 0.0)),
+                engine=_number(result.metadata.get("engine_seconds")),
             )
+            if result.metadata.get("stopped_by") == "engine":
+                print(f"({result.content})")
             return self.keys.take_line()
         if result.content.startswith("Capability '"):
             self.silenced = True  # asked once, logged once
@@ -119,6 +122,11 @@ class ChatSpeaker:
         elif result.metadata.get("refused") != "empty":
             print(f"({result.content})")
         return None
+
+
+def _number(value: object) -> float | None:
+    ok = isinstance(value, (int, float)) and not isinstance(value, bool)
+    return float(value) if ok else None  # type: ignore[arg-type]
 
 
 def _grant_line(home: Path) -> tuple[bool, str]:
@@ -186,7 +194,19 @@ def speak_check(
         ready = False
         print(f"  to grant it, add to {home / POLICY_FILE} by hand (mode 600):")
         print("  " + EXAMPLE_GRANT.replace("\n", "\n  "))
-    print(f"spoken length: at most {speak_config().max_chars} characters per reply")
+    config = speak_config()
+    print(f"spoken length: at most {config.max_chars} characters per reply")
+    if config.persistent:
+        print(
+            "engine lifetime: one engine per voice stays loaded while `steel chat "
+            "--speak` is open (about 142 MiB of RAM each, one voice at a time); a "
+            f"reply ends after {config.idle_end_seconds:g} s without new audio"
+        )
+    else:
+        print(
+            "engine lifetime: one engine process per reply "
+            "(STEEL_SPEAK_PERSISTENT=0); every reply loads the voice (about 4 s)"
+        )
     print("ready: " + ("yes" if ready else "no"))
     return 0 if ready else 1
 
