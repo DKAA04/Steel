@@ -1,6 +1,6 @@
 """The ``steel`` command.
 
-steel doctor              check pin, Rust extension, config and permissions
+steel doctor              check pin, Rust extension, config, permissions and memory pressure
 steel chat                chat with automatic memory (no tools)
 steel memory list         every remembered entry, with ids
 steel memory audit        state of every store that can hold conversation text
@@ -69,6 +69,10 @@ def _doctor() -> int:
     policy_ok, policy_lines = _policy_lines(home)
     ok &= policy_ok
     print("\n".join(policy_lines))
+    # A warning only: a busy machine is not a broken setup.
+    from steel.meminfo import memory_report
+
+    print("\n".join(memory_report()))
     return 0 if ok else 1
 
 

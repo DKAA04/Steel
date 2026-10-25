@@ -54,7 +54,7 @@ export OPENJARVIS_NO_UPDATE_CHECK=1
 ## Use
 
 ```bash
-steel doctor                      # pin, Rust extension, config, permissions
+steel doctor                      # pin, Rust extension, config, permissions; warns if memory is tight
 steel chat                        # chat; facts are extracted in the background
 steel memory list                 # every remembered entry, with id and expiry
 steel memory audit                # state of every store that can hold chat text
