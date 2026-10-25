@@ -1,7 +1,7 @@
 """The ``steel`` command.
 
 steel doctor              check pin, Rust extension, config, permissions and memory pressure
-steel chat                chat with automatic memory (no tools)
+steel chat                chat with automatic memory; /search /notes /room /look run tools you grant (the model cannot)
 steel memory list         every remembered entry, with ids
 steel memory audit        state of every store that can hold conversation text
 steel remember TEXT [--days N]    store a trusted fact, or an expiring note (N <= 7)
@@ -474,8 +474,11 @@ def main(argv: list[str] | None = None) -> int:
         )
     elif args.command == "chat":
         from steel.chat import open_session, run_repl
+        from steel.slash import build_slash
+        from steel.voice.terminal import Terminal
 
-        run_repl(open_session(config, home))
+        session = open_session(config, home)
+        run_repl(session, build_slash(home, session, Terminal()))
     return 0
 
 

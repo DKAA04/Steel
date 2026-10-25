@@ -23,6 +23,7 @@ from steel.chat import ChatSession, finish
 from steel.home import MODELS_DIR, POLICY_FILE
 from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
+from steel.slash import SlashCommands, banner, build_slash
 from steel.tools import MICROPHONE_TOOL, get_microphone_tool
 from steel.voice.config import voice_config
 from steel.voice.consent import (
@@ -258,14 +259,17 @@ def run_voice_repl(
     terminal: Terminal | None = None,
     tool: Any = None,
     speaker: EspeakSpeaker | None = None,
+    slash: SlashCommands | None = None,
 ) -> int:
     """``steel chat --voice``. An empty line means "speak"; typing still works.
 
     The transcript is shown first. Enter sends it through ``session.ask`` (the
     same path as typed text: guardrails, user-only fact extraction); Esc discards
-    it, and a discarded transcript is never passed on.
+    it, and a discarded transcript is never passed on. A TYPED line that starts
+    with "/" is a slash command (docs/INJECTION.md); a transcript never is.
     """
     terminal = terminal or Terminal()
+    slash = slash or build_slash(home, session, terminal)
     tool = tool or get_microphone_tool(home, push_to_talk=terminal)
     executor = _executor(home, tool)
     if not speak:
@@ -276,8 +280,9 @@ def run_voice_repl(
             print(
                 "No local text-to-speech is installed (espeak-ng); replies stay silent."
             )
-    print(f"STEEL chat (voice) - model {session.model}. The model has no tools.")
+    print(f"STEEL chat (voice) - model {session.model}. The model cannot run tools.")
     print("Press Enter on an empty line to speak, or type a message. /quit leaves.")
+    print(banner(slash))
     if session.service is None:
         print("Automatic memory is OFF ([memory] enabled = false).")
     try:
@@ -288,6 +293,9 @@ def run_voice_repl(
                 break
             if line in ("/quit", "/exit"):
                 break
+            if line.startswith("/"):
+                slash.handle(line)  # typed by the owner; never a transcript
+                continue
             language: str | None = None
             if line:
                 text = line

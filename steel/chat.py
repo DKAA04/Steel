@@ -14,7 +14,7 @@ import os
 import threading
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from openjarvis.core.events import EventBus
 from openjarvis.core.types import Message, Role
@@ -24,6 +24,9 @@ from openjarvis.tools.storage.context import ContextConfig, inject_context
 from steel.extractor import SteelFactExtractor
 from steel.memory import SteelMemory
 from steel.tooldata import ToolData
+
+if TYPE_CHECKING:
+    from steel.slash import SlashCommands
 
 # Keep at most this many past messages in the prompt (RAM only).
 MAX_HISTORY_MESSAGES = 20
@@ -221,9 +224,20 @@ def open_session(
     )
 
 
-def run_repl(session: ChatSession) -> None:
-    """Interactive loop. Type /quit (or Ctrl-D) to leave."""
-    print(f"STEEL chat - model {session.model}. No tools. Type /quit to exit.")
+def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
+    """Interactive loop. Type /quit (or Ctrl-D) to leave.
+
+    Only the line typed here can be a slash command (docs/INJECTION.md rule 3);
+    the model's reply is printed and never parsed.
+    """
+    print(
+        f"STEEL chat - model {session.model}. The model cannot run tools; you can, "
+        "with slash commands. Type /quit to exit."
+    )
+    if slash is not None:
+        from steel.slash import banner
+
+        print(banner(slash))
     if session.service is None:
         print("Automatic memory is OFF ([memory] enabled = false).")
     try:
@@ -236,6 +250,12 @@ def run_repl(session: ChatSession) -> None:
                 break
             if not text:
                 continue
+            if text.startswith("/"):
+                if slash is None:
+                    print("Slash commands are not available here; nothing was sent.")
+                else:
+                    slash.handle(text)
+                continue  # a command line never reaches the model
             print("steel>", session.ask(text))
     except KeyboardInterrupt:
         print()

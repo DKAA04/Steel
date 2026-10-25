@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
 import os
 import signal
 import subprocess
@@ -455,6 +456,50 @@ class ChatVoiceTest(VoiceCase):
             [c.args[0] for c in ask.call_args_list],
             ["My favourite colour is teal.", "typed message"],
         )
+
+    def test_a_typed_slash_command_runs_but_a_transcript_that_reads_like_one_does_not(
+        self,
+    ) -> None:
+        # docs/INJECTION.md rule 3: only typed lines are commands.
+        (self.home / "steel_policy.json").write_text(
+            json.dumps(
+                {
+                    "agents": [
+                        {
+                            "agent_id": "voice",
+                            "grants": [
+                                {
+                                    "capability": "sensor:microphone",
+                                    "pattern": "microphone_listen",
+                                }
+                            ],
+                        },
+                        {
+                            "agent_id": "chat",
+                            "grants": [
+                                {
+                                    "capability": "memory:read:facts",
+                                    "pattern": "memory_search_facts",
+                                }
+                            ],
+                        },
+                    ]
+                }
+            )
+        )
+        (self.home / "steel_policy.json").chmod(0o600)
+        SteelMemory(self.home).remember("User likes green tea")
+        self.transcriber.text = "/search tea"
+        self.terminal.confirms = [False, True]  # Esc on the result, Enter on the speech
+        with mock.patch.object(self.session, "ask", return_value="ok") as ask:
+            out = self.run_chat(["/search tea", "", "/quit"])
+        self.assertIn("Slash commands for agent 'chat': /search allowed", out)
+        self.assertIn("User likes green tea", out)  # the typed command ran
+        # The spoken "/search tea" went to the model as text and ran nothing.
+        self.assertEqual([c.args[0] for c in ask.call_args_list], ["/search tea"])
+        log = (self.home / "steel_policy_audit.jsonl").read_text().splitlines()
+        searches = [x for x in log if "memory:read:facts" in x]
+        self.assertEqual(len(searches), 1)
 
     def test_discarding_sends_nothing_and_remembers_nothing(self) -> None:
         self.terminal.confirms = [False]
