@@ -31,7 +31,7 @@ from steel.timings import ModelTiming, SpeechTiming, model_timing, timing_line
 from steel.warm import (
     KEEP_ALIVE_ENV,
     WARMUP_TEXT,
-    install_keep_alive,
+    install_request_settings,
     keep_alive_setting,
     start_warmup,
 )
@@ -243,6 +243,12 @@ class WarmUpTest(base.HomeTestCase):
         super().setUp()
         self.ollama = OllamaFake()
         os.environ.pop(KEEP_ALIVE_ENV, None)
+        # STEEL's request client wraps httpx.HTTPTransport(): use the fake one.
+        patch = mock.patch.object(
+            warm_module.httpx, "HTTPTransport", self.ollama.transport
+        )
+        patch.start()
+        self.addCleanup(patch.stop)
 
     def test_the_warm_up_sends_one_fixed_word_and_no_user_text(self) -> None:
         SteelMemory(self.home).remember("My bank PIN is 4711.")
@@ -289,7 +295,7 @@ class WarmUpTest(base.HomeTestCase):
         ):
             with no_network():
                 self.assertIsNone(start_warmup(engine, "fake"))
-                self.assertFalse(install_keep_alive(engine, "30m"))
+                self.assertFalse(install_request_settings(engine, "30m", 4096))
         self.assertEqual(self.ollama.bodies, [])
 
     def test_a_failed_warm_up_is_silent_and_changes_nothing(self) -> None:
@@ -363,7 +369,9 @@ class KeepAliveTest(base.HomeTestCase):
         engine = self.ollama.engine()
         with mock.patch.dict(os.environ, {"HTTP_PROXY": "http://proxy.invalid:3128"}):
             self.assertTrue(
-                install_keep_alive(engine, "30m", inner=self.ollama.transport())
+                install_request_settings(
+                    engine, "30m", 4096, inner=self.ollama.transport()
+                )
             )
         self.assertFalse(engine._client._trust_env)
 

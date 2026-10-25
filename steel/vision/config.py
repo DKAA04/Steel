@@ -11,6 +11,8 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
+from steel.warm import num_ctx_setting
+
 # The chat model, already in RAM for `steel chat`. The owner measured 23 to 26 s
 # a look with it, and about 100 s with qwen2.5vl:3b (STEEL_VISION_MODEL selects it).
 DEFAULT_MODEL = "qwen3.5:2b"
@@ -50,7 +52,9 @@ class VisionConfig:
     start_wait_seconds: float = 60.0  # how long ``steel look`` waits for Enter
     capture_timeout: float = 10.0  # ffmpeg is killed after this many seconds
     model_timeout: float = 240.0  # enough for qwen2.5vl:3b (100 to 120 s here)
-    num_ctx: int = 4096  # context window asked of Ollama (its default here is 16384)
+    # The chat's context window (STEEL_OLLAMA_NUM_CTX): the same model with another
+    # context would be reloaded by Ollama at every /look.
+    num_ctx: int = 4096
     max_tokens: int = 300
 
 
@@ -65,6 +69,7 @@ def vision_config(env: Mapping[str, str] | None = None) -> VisionConfig:
         device=device if _DEVICE_RE.fullmatch(device) else base.device,
         model=model if _MODEL_RE.fullmatch(model) and ".." not in model else base.model,
         warmup_frames=_warmup(env.get("STEEL_CAMERA_WARMUP_FRAMES", "")),
+        num_ctx=num_ctx_setting(env)[0],
     )
 
 

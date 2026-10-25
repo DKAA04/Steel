@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+import httpx
 from openjarvis.core.types import Message, Role
 
 from steel.vision.config import MAX_DESCRIPTION_CHARS, VisionConfig
@@ -126,6 +127,8 @@ class CallTest(unittest.TestCase):
             def __init__(self, host: str, *, timeout: float) -> None:
                 super().__init__("Mail me at bob@example.com about the desk.")
                 built.append((host, timeout))
+                self._host, self._timeout = host, timeout
+                self._client = httpx.Client()
 
         with mock.patch("openjarvis.engine.ollama.OllamaEngine", Recorder):
             described = OllamaDescriber(

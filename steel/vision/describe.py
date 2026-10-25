@@ -117,9 +117,14 @@ class OllamaDescriber:
         if self._engine is None:
             from openjarvis.engine.ollama import OllamaEngine
 
-            self._engine = _guarded(
-                OllamaEngine(self._host, timeout=self._config.model_timeout)
+            from steel.warm import install_request_settings, keep_alive_setting
+
+            engine = OllamaEngine(self._host, timeout=self._config.model_timeout)
+            # Same context and keep-alive as the chat, so Ollama keeps ONE model.
+            install_request_settings(
+                engine, keep_alive_setting()[0], self._config.num_ctx
             )
+            self._engine = _guarded(engine)
         return self._engine
 
     def describe(self, image_b64: str, question: str) -> str:

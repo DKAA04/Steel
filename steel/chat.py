@@ -23,10 +23,12 @@ from openjarvis.core.types import Message, Role
 from openjarvis.memory.service import MemoryService, publish_completed_exchange
 from openjarvis.tools.storage.context import ContextConfig, inject_context
 
+from steel.context import fit_to_context
 from steel.extractor import SteelFactExtractor
 from steel.memory import SteelMemory
 from steel.timings import ModelTiming, model_timing
 from steel.tooldata import ToolData
+from steel.warm import DEFAULT_NUM_CTX, WARMUP_TEXT
 
 if TYPE_CHECKING:
     from steel.slash import SlashCommands
@@ -111,6 +113,8 @@ class ChatSession:
     # Stage times of the last turn, for --timings (numbers only, never stored).
     last_timing: ModelTiming | None = None
     clock: Callable[[], float] = time.monotonic
+    # The context window every request asks for (docs/LATENCY.md section 9).
+    num_ctx: int = DEFAULT_NUM_CTX
 
     def _system_prompt(self) -> str:
         """Base prompt plus the user-authored MEMORY.md / USER.md entries."""
@@ -132,20 +136,33 @@ class ChatSession:
             parts.append("Temporary notes (they expire):\n" + "\n".join(own))
         return "\n\n".join(parts)
 
-    def ask(self, user_text: str) -> str:
-        """Send one user message and return the reply."""
+    def build_messages(self, user_text: str) -> list[Message]:
+        """The prompt for *user_text*: system prompt and memory, recent history,
+        the new message, cut to fit the context window."""
         messages = [Message(role=Role.SYSTEM, content=self._system_prompt())]
         messages += self.history[-MAX_HISTORY_MESSAGES:]
         messages.append(Message(role=Role.USER, content=user_text))
         # Add remembered facts. inject_context drops quarantined (untrusted)
         # facts; backend=None means no document store (memory.db) is opened.
+        # Facts get at most a quarter of the window (a word is at least a token).
         messages = inject_context(
             user_text,
             messages,
             None,
-            config=ContextConfig(),
+            config=ContextConfig(max_context_tokens=min(2048, self.num_ctx // 4)),
             facts=self.memory.facts.list(),
         )
+        return fit_to_context(messages, self.num_ctx)
+
+    def warmup_messages(self) -> list[Message]:
+        """What the first turn sends before the owner's message, then the fixed
+        word ``ready`` (so the model's template has a user turn). Same code as
+        a real turn, so the model's processed prefix can be reused."""
+        return self.build_messages(WARMUP_TEXT)
+
+    def ask(self, user_text: str) -> str:
+        """Send one user message and return the reply."""
+        messages = self.build_messages(user_text)
         started = self.clock()
         result = self.engine.generate(messages, model=self.model)
         self.last_timing = model_timing(result, self.clock() - started)
@@ -224,9 +241,10 @@ def open_session(
     if not model:
         raise RuntimeError("No model configured ([intelligence] default_model).")
     # $STEEL_OLLAMA_KEEP_ALIVE on every request, for a local Ollama only.
-    from steel.warm import install_keep_alive, keep_alive_setting
+    from steel.warm import install_request_settings, keep_alive_setting, num_ctx_setting
 
-    install_keep_alive(engine, keep_alive_setting()[0])
+    num_ctx = num_ctx_setting()[0]
+    install_request_settings(engine, keep_alive_setting()[0], num_ctx)
 
     # OpenJarvis guardrails: redact secrets/PII in model input and output.
     # Its audit logger writes pattern names (not text) to audit.db.
@@ -245,7 +263,12 @@ def open_session(
         )
         service.start()
     return ChatSession(
-        engine=engine, model=model, memory=memory, bus=bus, service=service
+        engine=engine,
+        model=model,
+        memory=memory,
+        bus=bus,
+        service=service,
+        num_ctx=num_ctx,
     )
 
 

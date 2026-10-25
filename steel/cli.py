@@ -256,13 +256,14 @@ def _tool_call(home: Path, name: str, agent_id: str, arguments: str) -> int:
 def _open_chat(config: Any, home: Path) -> ChatSession:
     """open_session, then load the model in the background (docs/LATENCY.md 8)."""
     from steel.chat import open_session
-    from steel.warm import keep_alive_setting, start_warmup
+    from steel.warm import keep_alive_setting, num_ctx_setting, start_warmup
 
-    _value, problem = keep_alive_setting()
-    if problem:
-        print(f"steel: {problem}", file=sys.stderr)
+    for _value, problem in (keep_alive_setting(), num_ctx_setting()):
+        if problem:
+            print(f"steel: {problem}", file=sys.stderr)
     session = open_session(config, home)
-    start_warmup(session.engine, session.model)  # never waits
+    # Built here, in the main thread: it reads the memory files.
+    start_warmup(session.engine, session.model, session.warmup_messages())  # no wait
     return session
 
 
