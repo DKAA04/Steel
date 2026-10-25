@@ -90,7 +90,7 @@ The transcript is treated exactly like typed text from the moment the owner conf
 | `steel/voice/terminal.py` | Enter to start, Enter to stop, Enter/Esc to confirm, on a real terminal; type-ahead is flushed |
 | `steel/voice/stt.py` | `LocalWhisper`: `faster-whisper` on the CPU from a model directory with `local_files_only`, audio as a NumPy array, Silero VAD before the model, restricted language detection. Imports neither `openjarvis.speech` nor any cloud code |
 | `steel/voice/config.py` | `STEEL_VOICE_*` settings, validated, with safe fallbacks |
-| `steel/voice/commands.py`, `steel/voice/speak.py` | `steel voice check/consent/revoke/listen`, the `chat --voice` loop, optional `espeak-ng` replies |
+| `steel/voice/commands.py` | `steel voice check/consent/revoke/listen`, the `chat --voice` loop (spoken replies: Phase 5a below) |
 | `steel/tools/microphone.py` | `microphone_listen`: one capability (`sensor:microphone`), no arguments, transcript text only, audio wiped in a `finally`; `get_microphone_tool` in `steel/tools/__init__.py` builds it |
 | `scripts/voice_check.py` | The owner's live check; scratch directory, deleted afterwards |
 | `docs/VOICE.md` | The design (written first), the measurements, the consent text and the test for each claim |
@@ -154,6 +154,36 @@ flowchart LR
 | `steel/meminfo.py` | `steel doctor`'s memory-pressure warning (reads `/proc/meminfo` only) |
 | `docs/INJECTION.md` | The threat model and rules (written first), why model-initiated tool calls are not implemented, and the test for each rule |
 
+### Phase 5a: spoken replies (opt-in, the owner's grant)
+
+```mermaid
+flowchart LR
+    R[reply printed by steel chat --speak] --> CS[ChatSpeaker]
+    CS --> E[build_executor: policy check, agent voice]
+    E -->|audio:play granted by hand for speak, logged| T[speak tool]
+    T --> P[speak.text: refuse tool data, camera text, flagged; redact; strip markdown, links, code; cap 600]
+    P --> L[pick language: en, es, it, else en; pick voice]
+    L --> G["separate process: unshare --net, venv python -I -m piper (GPL); text on stdin"]
+    G -->|raw PCM on stdout| B[play: SPEAKING line FIRST, 4 KB chunks, one zeroed buffer]
+    B -->|proof the line is shown| A[aplay reading raw audio from a pipe]
+    K[Enter, typed line, Ctrl-C] -.stop.-> B
+```
+
+Nothing of Piper is imported into STEEL's process; the boundary is the pipe (docs/SPEAK.md section 4). A line typed to stop a reply is used as the next message. In voice chat a reply is spoken after the recording has ended, never during.
+
+| Module | Role |
+| --- | --- |
+| `steel/speak/text.py`, `steel/speak/language.py`, `steel/speak/config.py` | What may be spoken and in what form; the language guess; `STEEL_SPEAK_MAX_CHARS` |
+| `steel/speak/voices.py` | The pinned voices (revision, sizes, SHA-256); which installed voice reads a language |
+| `steel/speak/synth.py` | Starting Piper as a separate program in a network namespace, text on stdin, minimal environment; no `unshare`, no engine |
+| `steel/speak/indicator.py`, `steel/speak/player.py`, `steel/speak/playback.py`, `steel/speak/keys.py` | The `▶ SPEAKING` line and its proof; `aplay` on a pipe (opens only with the proof); the relay loop, the only opener of the speaker; Enter or a typed line to stop |
+| `steel/speak/commands.py` | `steel speak check` (read only) and `say`, `ChatSpeaker` for the chat loops |
+| `steel/tools/speak.py` | `speak`: one capability (`audio:play`), one `text` argument, a status without the text; `get_speak_tool` in `steel/tools/__init__.py` builds it |
+| `steel/offline.py` | `ORT_DISABLE_TELEMETRY=1` for onnxruntime (also for faster-whisper since Phase 5a) |
+| `scripts/speak_setup.py`, `scripts/piper-requirements.txt` | One-time setup: the engine from hash-pinned wheels, the voices checked against their SHA-256 |
+| `scripts/speak_check.py` | The owner's live check through the real speakers; scratch grant |
+| `docs/SPEAK.md` | The design (written first), measurements, licences, and the test for each claim |
+
 ### Relationship to OpenJarvis
 
 STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`. The slash commands reuse `SecretScanner`, `PIIScanner` and `InjectionScanner` on tool results, and the stock `ToolExecutor` through `build_executor`.
@@ -170,9 +200,9 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 - No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
-- No network server, no wake word, no always-on listening, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above).
+- No network server, no wake word, no always-on listening, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above). Spoken replies have no echo cancellation; none is needed while the microphone is push-to-talk (docs/SPEAK.md section 7).
 - Conversation history is not persisted.
 
 ## Planned extension points
 
-`SteelPolicy`, the first tools, push-to-talk voice and camera snapshots (Phases 2a to 3) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.
+`SteelPolicy`, the first tools, push-to-talk voice, camera snapshots (Phases 2a to 3), slash commands (Phase 4) and spoken replies (Phase 5a) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.

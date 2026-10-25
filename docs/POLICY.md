@@ -87,6 +87,7 @@ Each capability has exactly one name. A name that is not in this table is **unkn
 | `memory:write` | add facts or notes | OpenJarvis name, kept |
 | `sensor:camera` | read the camera | STEEL |
 | `sensor:microphone` | read the microphone | STEEL |
+| `audio:play` | play sound on the speakers (spoken replies); not a sensor, but like one it needs the exact tool name and is never covered by a wildcard (Phase 5a) | STEEL |
 | `net:outbound` | open network connections | STEEL |
 | `fs:read` | read files (needs a path grant) | STEEL |
 | `fs:write` | write files (needs a path grant) | STEEL |
@@ -149,15 +150,15 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 - **`deny`**: capability names (exact, `memory:read:*`, any `family:*`, or a bare `*`) that always win over any grant for that agent. Deny entries may use every wildcard because denying more is safe.
 - Grants are **per agent id**; there is no `_default` agent and no inheritance.
 
-### 3.3 Sensors
+### 3.3 Sensors and the speaker
 
-`sensor:camera` and `sensor:microphone` can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
+`sensor:camera`, `sensor:microphone` and, since Phase 5a, `audio:play` (the speaker: what is played can be overheard) can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
 
 ```json
 {"capability": "sensor:camera", "pattern": "camera_look"}
 ```
 
-`sensor:*`, a bare `*`, and a sensor grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1); the camera's is `{"capability": "sensor:camera", "pattern": "camera_look"}` for the agent `eyes` (section 7.2).
+`sensor:*`, `audio:*`, a bare `*`, and a sensor or `audio:play` grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1); the camera's is `{"capability": "sensor:camera", "pattern": "camera_look"}` for the agent `eyes` (section 7.2); the speaker's is `{"capability": "audio:play", "pattern": "speak"}` for the agent `voice` (section 7.4).
 
 ### 3.4 Paths (`fs:read`, `fs:write`)
 
@@ -329,6 +330,26 @@ The owner's typed slash commands run as the agent `chat`, one `ToolExecutor` bui
 ```
 
 Several agents go in the same `agents` list (for example `chat` and `eyes` together). The camera grant must name `camera_look` exactly, as everywhere; `/look` also needs the camera consent file. `steel chat` prints one line at the start saying which commands these grants allow (asked with `preview`, so it writes no log line). The `question` of `/look` is typed by the owner. What the policy cannot do here (it does not decide what a result says, or whether the model is misled by data the owner added) is in docs/INJECTION.md, with the test for each rule (they are not repeated in section 8).
+
+### 7.4 The speak tool and its grant (Phase 5a)
+
+`steel/tools/speak.py` defines `speak`. It declares exactly one capability, `audio:play`, takes one argument (`text`, at most 8000 characters: the assistant's reply) and returns a short status ("Spoken (en, 4.2 s).") that never contains the text. It is built only by `get_speak_tool(home)` and run only through `build_executor` as the agent `voice`, by `steel chat --speak`, `steel chat --voice --speak` and `steel speak say`. Nothing is registered with the OpenJarvis `ToolRegistry`. With no grant nothing is played and the denial is logged (names only); in chat the notice is printed once and the session stays silent. Example, written **by hand** (mode 600; STEEL never writes it), also printed by `steel speak check` while the grant is missing:
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "voice",
+      "grants": [
+        {"capability": "sensor:microphone", "pattern": "microphone_listen"},
+        {"capability": "audio:play",        "pattern": "speak"}
+      ]
+    }
+  ]
+}
+```
+
+A grant is necessary, not sufficient: the tool also refuses tool-data blocks, camera text and anything the injection scanner flags, needs a terminal for the `▶ SPEAKING` line, and needs the engine to run without network (docs/SPEAK.md section 6). The policy cannot decide who is in the room to hear it. The `text` argument comes from the chat model's reply today; the tool treats it as untrusted for that reason (it is cleaned, redacted and capped). The tests are listed in docs/SPEAK.md section 10 (they are not repeated in section 8).
 
 ## 8. Evidence
 

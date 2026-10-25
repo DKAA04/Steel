@@ -93,6 +93,10 @@ Nothing in STEEL issues slash commands automatically, so these limits guard agai
 
 Room notes are camera descriptions, so they get their own capability, `memory:read:room`, and their own tool, `memory_search_room`. `memory_search_notes` no longer returns room notes. A grant for one does not allow the other, and the grant wildcard `memory:read:*` does **not** cover `memory:read:room` (like sensors, it needs its exact name), so a grants file written before Phase 4 does not silently start reading camera text.
 
+### Also: spoken replies (Phase 5a)
+
+`--speak` adds an **output** channel, not an input one: after a reply is printed, STEEL itself (not the model) passes that reply to the `speak` tool, as agent `voice` with its own grant (`audio:play`). The model cannot start it, choose what it says or call anything else through it, and one reply is one spoken call. What it may say is limited by docs/SPEAK.md section 6: a reply that contains a tool-data block (`[Tool result from`, `[End of tool result]`) or camera text (`[Camera description`) is not spoken at all, nor is one the injection scanner flags or cannot check, and the rest is redacted and capped. So an injected tool result cannot be read aloud verbatim; but a model misled by data the owner added can still *say* something misleading, aloud, to whoever is in the room. Tests: docs/SPEAK.md section 10 (for example `test_speak_cli.py::ChatSpeakTest.test_a_reply_that_repeats_tool_data_is_not_spoken`).
+
 ## 4. Model-initiated tool calls: NOT IMPLEMENTED
 
 The chat model cannot call any tool, and nothing in this phase moves toward letting it. Before it could, all of this would have to be true and reviewed:
@@ -113,6 +117,7 @@ The chat model cannot call any tool, and nothing in this phase moves toward lett
 * **The owner can be persuaded.** If the model's reply tells the owner to run something, nothing stops the owner from doing it.
 * **Voice transcripts are trusted as the owner's words once confirmed**; a confirmed bystander sentence goes to the extractor like typed text.
 * **Room notes left the chat system prompt in Phase 5a.** In Phase 4 they were still listed there under a data heading; now the model sees one only after `/room` and the owner's Enter, as a wrapped block. Once added, it can still mislead the model like any added data.
+* **A spoken reply can be overheard**, and a misled model's reply is spoken like any other once it passes the rules above (docs/SPEAK.md section 8).
 * **Not a sandbox**: everything runs in one process; code in that process could bypass every rule. These rules stop mistakes and text, not hostile code.
 
 ## 6. Evidence
