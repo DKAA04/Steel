@@ -22,6 +22,7 @@ from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
 from steel.speak.config import SAY_MAX_CHARS, speak_config
 from steel.speak.keys import TypedLineStop
+from steel.speak.language import pick_language
 from steel.speak.synth import PIPER_VERSION, engine_dir, engine_python, engine_version
 from steel.speak.voices import (
     LANGUAGE_NAMES,
@@ -43,13 +44,18 @@ EXAMPLE_GRANT = """{"agent_id": "voice",
  "grants": [{"capability": "audio:play", "pattern": "speak"}]}"""
 
 
-def _executor(home: Path, tool: Any) -> Any:
+def _policy(home: Path) -> SteelPolicy:
     policy, problem = policy_or_deny_all(home)
     if problem is not None:
         print(
             f"steel: grants file invalid ({problem}); nothing is granted.",
             file=sys.stderr,
         )
+    return policy
+
+
+def _executor(home: Path, tool: Any, policy: SteelPolicy | None = None) -> Any:
+    policy = policy or _policy(home)
     return build_executor([tool], policy=policy, agent_id=SPEAK_AGENT)
 
 
@@ -63,9 +69,26 @@ class ChatSpeaker:
     def __init__(self, home: Path, *, tool: Any = None, keys: Any = None) -> None:
         self.keys = keys or TypedLineStop()
         self.tool = tool or get_speak_tool(home, keys=self.keys)
-        self._executor = _executor(home, self.tool)
+        policy = _policy(home)
+        self._executor = _executor(home, self.tool, policy)
+        # Read only (no decision is logged): the engine is started early only
+        # if speaking would be allowed. Speaking itself goes through the executor.
+        self._may_prepare = policy.preview(SPEAK_AGENT, "audio:play", SPEAK_TOOL)[0]
         self.silenced = False
         self.last_timing: SpeechTiming | None = None  # for --timings
+
+    def prepare(self, message: str) -> None:
+        """Before the model is asked: start the engine for the voice the reply
+        will probably need (the language of the owner's message), so it loads
+        while the model writes. Only the voice choice depends on the message;
+        the message itself never reaches the engine."""
+        if self.silenced or not self._may_prepare:
+            return
+        self.tool.prepare(pick_language(message))
+
+    def close(self) -> None:
+        """End of the chat: no engine is left waiting."""
+        self.tool.close()
 
     def say(self, reply: str) -> str | None:
         """Speak *reply*; return the line the owner typed to stop it, if any."""

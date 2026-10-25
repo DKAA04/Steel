@@ -6,11 +6,14 @@ is played and no engine or player program is started.
 
 from __future__ import annotations
 
+import builtins
 import contextlib
 import hashlib
 import io
 import json
+import socket
 import subprocess
+import tempfile
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -19,11 +22,11 @@ import test_steel as base
 from test_chat_slash import ReplyEngine
 from test_speak_tool import LOG, SpeakCase, speak_grant
 
-from steel.chat import run_repl
+from steel.chat import open_session, run_repl
 from steel.cli import main
 from steel.speak import commands
 from steel.speak.commands import REMINDER, ChatSpeaker, speak_check, speak_say
-from steel.speak.voices import PinnedFile, Voice, voice_dir
+from steel.speak.voices import PinnedFile, Voice, find_voice, voice_dir
 from steel.tooldata import prepare
 
 
@@ -116,6 +119,104 @@ class ChatSpeakTest(SpeakCase):
         out, _ = self.chat(["what did you see?", "/quit"], replies=(echoed,))
         self.assertEqual(self.engine.texts, [])
         self.assertIn("never read aloud", out)
+
+
+class EarlyStartChatTest(SpeakCase):
+    """The engine is started before the model is asked (docs/LATENCY.md 8)."""
+
+    chat = ChatSpeakTest.chat
+
+    def test_the_engine_is_started_before_the_model_is_asked(self) -> None:
+        self.write_grants(speak_grant())
+        order = self.engine.events
+
+        class Recording(ReplyEngine):
+            def generate(self, messages: Any, *, model: str, **kw: Any) -> Any:
+                if messages[0].content != base.EXTRACTOR_PROMPT:
+                    order.append("model")
+                return super().generate(messages, model=model, **kw)
+
+        engine = Recording("Fine, thanks.")
+        session = self.session(engine)
+        self.addCleanup(session.close, 5)
+        speaker = ChatSpeaker(self.home, tool=self.tool(), keys=self.keys)
+        with (
+            mock.patch("builtins.input", side_effect=["how are you?", "/quit"]),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            run_repl(session, None, speaker)
+        self.assertEqual(order, ["prepare", "model", "start", "close"])
+        english = voice_dir(self.home, find_voice("en_US-john-medium"))
+        self.assertEqual(self.engine.prepared, [english / "en_US-john-medium.onnx"])
+
+    def test_the_voice_started_early_follows_the_language_of_the_message(
+        self,
+    ) -> None:
+        self.write_grants(speak_grant())
+        self.chat(["¿Qué tiempo hace hoy en Valencia?", "/quit"], replies=("Sol.",))
+        (model,) = self.engine.prepared
+        self.assertEqual(model.name, "es_ES-carlfm-x_low.onnx")
+
+    def test_the_message_never_reaches_the_engine_only_the_reply_does(self) -> None:
+        self.write_grants(speak_grant())
+        self.chat(["my bank PIN is 4711", "/quit"], replies=("Noted.",))
+        self.assertTrue(all(isinstance(p, Path) for p in self.engine.prepared))
+        self.assertEqual(self.engine.texts, ["Noted."])
+        self.assertNotIn("4711", " ".join(map(str, self.engine.prepared)))
+
+    def test_without_the_grant_no_engine_is_started_early(self) -> None:
+        self.chat(["one", "two", "/quit"])
+        self.assertEqual(self.engine.prepared, [])
+        self.assertEqual(self.engine.texts, [])
+
+    def test_no_engine_is_left_waiting_after_quit_ctrl_d_ctrl_c_or_an_error(
+        self,
+    ) -> None:
+        self.write_grants(speak_grant())
+        for ending in ("/quit", EOFError(), KeyboardInterrupt(), RuntimeError("x")):
+            self.engine.closed = 0
+            try:
+                self.chat(["hello", ending])
+            except RuntimeError:
+                pass
+            self.assertEqual(self.engine.closed, 1, repr(ending))
+
+    def test_a_whole_spoken_turn_uses_no_network_and_writes_no_file(self) -> None:
+        self.write_grants(speak_grant())
+        speaker = ChatSpeaker(self.home, tool=self.tool(), keys=self.keys)
+        speaker.say("warm up")  # creates the decision log first
+        config = self.config()
+        config.memory.enabled = False  # memory writes are not this test's subject
+        session = open_session(config, self.home, engine=ReplyEngine("Sure."))
+        before = {p: p.stat().st_mtime_ns for p in self.home.rglob("*")}
+        real_open = builtins.open
+
+        def guarded(file: Any, mode: str = "r", *a: Any, **k: Any) -> Any:
+            if any(flag in mode for flag in "wx+") or (
+                "a" in mode and not str(file).endswith(LOG)
+            ):
+                raise AssertionError(f"tried to write {file!r}")
+            return real_open(file, mode, *a, **k)
+
+        def forbidden(*_: Any, **__: Any) -> Any:
+            raise AssertionError("no network and no temporary file in a turn")
+
+        with (
+            mock.patch("builtins.input", side_effect=["hello", "/quit"]),
+            mock.patch.object(builtins, "open", guarded),
+            mock.patch.object(tempfile, "mkstemp", forbidden),
+            mock.patch.object(tempfile, "NamedTemporaryFile", forbidden),
+            mock.patch.object(socket.socket, "connect", forbidden),
+            mock.patch.object(socket.socket, "connect_ex", forbidden),
+            mock.patch.object(socket, "create_connection", forbidden),
+            mock.patch.object(socket, "getaddrinfo", forbidden),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            run_repl(session, None, speaker)
+        self.assertEqual(self.engine.texts[-1], "Sure.")
+        after = {p: p.stat().st_mtime_ns for p in self.home.rglob("*")}
+        changed = {p.name for p in after if before.get(p) != after[p]}
+        self.assertLessEqual(changed, {LOG, "audit.db", "audit.db-journal"})
 
 
 class SpeakCheckTest(SpeakCase):

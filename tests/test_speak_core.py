@@ -5,12 +5,16 @@ started, no audio device is opened, nothing is played, no network is used.
 
 from __future__ import annotations
 
+import contextlib
 import os
 import pty
+import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 from typing import Any
@@ -56,16 +60,25 @@ class FakePopen:
     def __init__(self) -> None:
         self.calls = []
         self.stdin_data = bytearray()
+        self.processes: list[Any] = []
+        self.broken_pipe = False  # the next process dies as text is written
 
     def __call__(self, argv: list[str], **kwargs: Any) -> Any:
         self.calls.append({"argv": list(argv), **kwargs})
         owner = self
+        broken, self.broken_pipe = self.broken_pipe, False
 
         class Stdin:
             closed = False
 
+            def __init__(self) -> None:
+                self.data = bytearray()
+
             def write(self, data: bytes) -> int:
+                if broken:
+                    raise BrokenPipeError
                 owner.stdin_data += data
+                self.data += data
                 return len(data)
 
             def close(self) -> None:
@@ -74,6 +87,7 @@ class FakePopen:
         process = mock.Mock()
         process.stdin = Stdin()
         process.poll.return_value = None
+        self.processes.append(process)
         return process
 
 
@@ -218,6 +232,225 @@ class EngineTest(unittest.TestCase):
         meta.mkdir(parents=True)
         (meta / "METADATA").write_text("Name: piper-tts\nVersion: 1.8.0\n")
         self.assertEqual(engine_version(self.directory), "1.8.0")
+
+
+class EarlyStartTest(unittest.TestCase):
+    """The engine started before the reply exists (docs/LATENCY.md section 8)."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.directory = Path(tmp.name) / "piper"
+        (self.directory / "bin").mkdir(parents=True)
+        (self.directory / "bin" / "python").write_text("")
+        self.popen = FakePopen()
+        self.en = Path("/models/en_US-john-medium.onnx")
+        self.es = Path("/models/es_ES-carlfm-x_low.onnx")
+        self.tools = {"unshare": "/usr/bin/unshare", "setpriv": "/usr/bin/setpriv"}
+
+    def engine(self) -> PiperEngine:
+        engine = PiperEngine(self.directory, popen=self.popen, which=self.tools.get)
+        self.addCleanup(engine.close)
+        return engine
+
+    def test_a_prepared_engine_waits_with_no_text_then_gets_it_on_stdin(self) -> None:
+        engine = self.engine()
+        self.assertTrue(engine.prepare(self.en))
+        (process,) = self.popen.processes
+        self.assertEqual(process.stdin.data, b"")  # no text yet, only the voice
+        self.assertFalse(process.stdin.closed)
+        engine.start(SECRET, self.en)
+        self.assertEqual(len(self.popen.processes), 1)  # no second engine
+        self.assertEqual(process.stdin.data, (SECRET + "\n").encode())
+        self.assertTrue(process.stdin.closed)  # end of file: the end of the reply
+        for call in self.popen.calls:
+            self.assertFalse(any("4711" in part for part in call["argv"]))
+
+    def test_the_kernel_stops_the_engine_if_steel_dies(self) -> None:
+        self.engine().prepare(self.en)
+        argv = self.popen.calls[0]["argv"]
+        self.assertEqual(
+            argv[:8],
+            [
+                "/usr/bin/setpriv",
+                "--pdeathsig",
+                "KILL",
+                "--",
+                "/usr/bin/unshare",
+                "--net",
+                "--map-root-user",
+                "--",
+            ],
+        )
+        del self.tools["setpriv"]  # without setpriv: stdin's end of file only
+        self.engine().prepare(self.en)
+        self.assertEqual(self.popen.calls[1]["argv"][0], "/usr/bin/unshare")
+
+    def test_preparing_twice_for_the_same_voice_starts_one_engine(self) -> None:
+        engine = self.engine()
+        engine.prepare(self.en)
+        engine.prepare(self.en)
+        self.assertEqual(len(self.popen.processes), 1)
+
+    def test_a_waiting_engine_for_another_voice_is_stopped_for_a_fresh_one(
+        self,
+    ) -> None:
+        engine = self.engine()
+        engine.prepare(self.en)
+        engine.start("Hola.", self.es)
+        english, spanish = self.popen.processes
+        english.kill.assert_called_once_with()
+        self.assertEqual(english.stdin.data, b"")  # never got the text
+        self.assertEqual(spanish.stdin.data, b"Hola.\n")
+        self.assertIn(str(self.es), self.popen.calls[1]["argv"])
+
+    def test_a_crashed_waiting_engine_is_replaced_by_a_fresh_one(self) -> None:
+        engine = self.engine()
+        engine.prepare(self.en)
+        crashed = self.popen.processes[0]
+        crashed.poll.return_value = -9  # killed while it waited
+        engine.start("Hello.", self.en)
+        self.assertEqual(len(self.popen.processes), 2)
+        self.assertEqual(crashed.stdin.data, b"")
+        self.assertEqual(self.popen.processes[1].stdin.data, b"Hello.\n")
+        # And a crash while waiting is also noticed by the next prepare.
+        self.popen.processes[1].poll.return_value = 1
+        engine.prepare(self.en)
+        self.assertEqual(len(self.popen.processes), 3)
+
+    def test_an_engine_that_dies_as_the_text_arrives_is_replaced_once(self) -> None:
+        engine = self.engine()
+        self.popen.broken_pipe = True
+        engine.prepare(self.en)
+        engine.start("Hello.", self.en)
+        dead, fresh = self.popen.processes
+        dead.kill.assert_called()
+        self.assertEqual(fresh.stdin.data, b"Hello.\n")
+        # A fresh engine that dies too is an error, not a loop.
+        self.popen.broken_pipe = True
+        with self.assertRaises(EngineUnavailable):
+            engine.start("Hello.", self.en)
+        self.assertEqual(len(self.popen.processes), 3)
+
+    def test_close_stops_the_waiting_engine_and_the_next_reply_starts_fresh(
+        self,
+    ) -> None:
+        engine = self.engine()
+        engine.prepare(self.en)
+        engine.close()
+        waiting = self.popen.processes[0]
+        waiting.kill.assert_called_once_with()
+        self.assertTrue(waiting.stdin.closed)
+        engine.start("Hello.", self.en)
+        self.assertEqual(len(self.popen.processes), 2)
+        self.assertEqual(waiting.stdin.data, b"")
+
+    def test_without_unshare_or_the_engine_nothing_is_prepared(self) -> None:
+        del self.tools["unshare"]
+        self.assertFalse(self.engine().prepare(self.en))
+        self.tools["unshare"] = "/usr/bin/unshare"
+        (self.directory / "bin" / "python").unlink()
+        self.assertFalse(self.engine().prepare(self.en))
+        self.assertEqual(self.popen.calls, [])
+
+
+def _processes_with(marker: str) -> list[int]:
+    """Live processes whose command line contains *marker* (zombies excluded)."""
+    found = []
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            cmdline = (entry / "cmdline").read_bytes().replace(b"\0", b" ")
+            state = (entry / "stat").read_text().rsplit(")", 1)[1].split()[0]
+        except OSError:
+            continue
+        if marker.encode() in cmdline and state != "Z":
+            found.append(int(entry.name))
+    return found
+
+
+@unittest.skipUnless(shutil.which("setpriv"), "util-linux setpriv is not installed")
+class NoOrphanTest(unittest.TestCase):
+    """Real processes, but neither Piper nor unshare: a shell script stands in
+    for both and only waits for its stdin to end. Nothing is played."""
+
+    def setUp(self) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.root = Path(tmp.name)
+        self.marker = str(self.root)
+        (self.root / "piper" / "bin").mkdir(parents=True)
+        (self.root / "piper" / "bin" / "python").write_text("")
+        stand_in = self.root / "unshare-stand-in"
+        stand_in.write_text("#!/bin/sh\nread line\n")
+        stand_in.chmod(0o700)
+        self.which = {
+            "unshare": str(stand_in),
+            "setpriv": shutil.which("setpriv"),
+        }.get
+        self.addCleanup(self._kill_leftovers)
+
+    def _kill_leftovers(self) -> None:
+        for pid in _processes_with(self.marker):
+            with contextlib.suppress(OSError):
+                os.kill(pid, signal.SIGKILL)
+
+    def wait_until_gone(self, seconds: float = 5.0) -> list[int]:
+        deadline = time.monotonic() + seconds
+        while _processes_with(self.marker) and time.monotonic() < deadline:
+            time.sleep(0.05)
+        return _processes_with(self.marker)
+
+    def test_no_engine_process_is_left_after_the_chat_closes_it(self) -> None:
+        engine = PiperEngine(self.root / "piper", which=self.which)
+        self.assertTrue(engine.prepare(self.root / "voice.onnx"))
+        self.assertEqual(len(_processes_with(self.marker)), 1)
+        engine.close()
+        self.assertEqual(self.wait_until_gone(), [])
+
+    def test_no_engine_process_is_left_if_steel_is_killed(self) -> None:
+        # The paths go in the environment, so only the engine's command line
+        # holds the marker, not this stand-in for STEEL.
+        code = (
+            "import os, sys\n"
+            "from pathlib import Path\n"
+            "from steel.speak.synth import PiperEngine\n"
+            "root = Path(os.environ['STAND_IN_ROOT'])\n"
+            "tools = {'unshare': str(root / 'unshare-stand-in'),"
+            " 'setpriv': os.environ['STAND_IN_SETPRIV']}\n"
+            "engine = PiperEngine(root / 'piper', which=tools.get)\n"
+            "assert engine.prepare(root / 'voice.onnx')\n"
+            "print('ready', flush=True)\n"
+            "sys.stdin.read()\n"
+        )
+        env = {
+            **os.environ,
+            "STAND_IN_ROOT": str(self.root),
+            "STAND_IN_SETPRIV": str(self.which("setpriv")),
+        }
+        steel = subprocess.Popen(
+            [sys.executable, "-I", "-c", code],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            text=True,
+            env=env,
+        )
+
+        def stop_steel() -> None:
+            steel.kill()
+            steel.wait(5)
+            for stream in (steel.stdin, steel.stdout):
+                with contextlib.suppress(OSError):
+                    stream.close()
+
+        self.addCleanup(stop_steel)
+        self.assertEqual(steel.stdout.readline().strip(), "ready")
+        # The stand-in engine runs; STEEL is killed with no chance to clean up.
+        self.assertEqual(len(_processes_with(self.marker)), 1)
+        steel.kill()
+        steel.wait(5)
+        self.assertEqual(self.wait_until_gone(), [])
 
 
 class SinkTest(unittest.TestCase):

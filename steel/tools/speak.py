@@ -91,6 +91,22 @@ class Speak(BaseTool):
             required_capabilities=["audio:play"],
         )
 
+    def prepare(self, language: str) -> bool:
+        """Start the engine for this language's voice early (docs/LATENCY.md 8).
+
+        Plays nothing and opens no device: the engine only loads the voice and
+        waits for text on its stdin. The text arrives later, through
+        ``execute``, after the policy allowed it. Whether an engine is waiting.
+        """
+        voice = voice_for(self._home, language)
+        if voice is None:
+            return False
+        return self._engine.prepare(voice_dir(self._home, voice) / voice.model.name)
+
+    def close(self) -> None:
+        """Stop a waiting engine (end of the chat)."""
+        self._engine.close()
+
     def cancel(self) -> None:
         """Stop a reply being spoken (Ctrl-C)."""
         self._cancel.set()

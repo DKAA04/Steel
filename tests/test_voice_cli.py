@@ -392,7 +392,7 @@ class ChatVoiceTest(VoiceCase):
         self.addCleanup(self.session.close, 1)
         self.terminal = FakeTerminal([True])
         self.transcriber.text = "My favourite colour is teal."
-        self.speaker = mock.Mock(spec=["say"])
+        self.speaker = mock.Mock(spec=["say", "prepare", "close"])
         self.speaker.say.return_value = None
 
     def run_chat(
@@ -588,11 +588,16 @@ class ChatVoiceTest(VoiceCase):
         self.speaker.say.side_effect = lambda _reply: open_at_say.append(
             sum(src.opened - src.closed for src in self.sources)
         )
+        # The engine is started early too only after the recording has ended.
+        self.speaker.prepare.side_effect = lambda _text: open_at_say.append(
+            sum(src.opened - src.closed for src in self.sources)
+        )
         with mock.patch.object(self.session, "ask", return_value="Hola"):
             out = self.run_chat(["", "/quit"], speak=True, speaker=self.speaker)
         self.speaker.say.assert_called_once_with("Hola")  # the reply, nothing else
         self.assertIn("anyone nearby can hear them", out)
-        self.assertEqual(open_at_say, [0])  # the microphone was closed by then
+        self.assertEqual(open_at_say, [0, 0])  # the microphone was closed by then
+        self.speaker.close.assert_called_once_with()  # nothing left waiting
 
 
 class ChatVoiceCommandTest(CliCase):

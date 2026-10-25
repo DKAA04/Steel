@@ -48,15 +48,28 @@ class FakeEngine:
         self.texts: list[str] = []
         self.models: list[Path] = []
         self.runs: list[FakeRun] = []
+        self.prepared: list[Path] = []
+        self.closed = 0
+        self.events: list[str] = []  # "prepare", "start", "close" in order
 
     def start(self, text: str, model: Path) -> FakeRun:
         if self.fail is not None:
             raise self.fail
+        self.events.append("start")
         self.texts.append(text)
         self.models.append(model)
         run = FakeRun(self.chunks)
         self.runs.append(run)
         return run
+
+    def prepare(self, model: Path) -> bool:
+        self.events.append("prepare")
+        self.prepared.append(model)
+        return True
+
+    def close(self) -> None:
+        self.events.append("close")
+        self.closed += 1
 
 
 class FakeSink:

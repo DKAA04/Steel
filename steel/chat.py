@@ -297,6 +297,8 @@ def run_repl(
                 else:
                     slash.handle(text)
                 continue  # a command line never reaches the model
+            if speaker is not None:
+                speaker.prepare(text)  # the voice loads while the model writes
             reply = session.ask(text)
             print("steel>", reply)
             if speaker is not None:
@@ -306,6 +308,8 @@ def run_repl(
     except KeyboardInterrupt:
         print()
     finally:
+        if speaker is not None:
+            speaker.close()  # no engine is left waiting
         finish(session)
 
 
