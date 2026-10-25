@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any
 
 from steel.home import MODELS_DIR
+from steel.offline import telemetry_off
 
 
 class SpeechModelMissing(RuntimeError):
@@ -43,6 +44,7 @@ def _load_whisper(path: Path) -> Any:
     # Belt and braces: a model *directory* never triggers a download, and neither
     # does local_files_only, but the hub library is also told it is offline.
     os.environ.setdefault("HF_HUB_OFFLINE", "1")
+    telemetry_off()  # onnxruntime is loaded with faster-whisper
     from faster_whisper import WhisperModel
 
     return WhisperModel(
@@ -52,6 +54,7 @@ def _load_whisper(path: Path) -> Any:
 
 def _find_speech(samples: Any) -> bool:
     """Silero VAD (bundled with faster-whisper): is there any speech at all?"""
+    telemetry_off()  # the VAD model runs on onnxruntime
     from faster_whisper.vad import VadOptions, get_speech_timestamps
 
     return bool(get_speech_timestamps(samples, VadOptions()))

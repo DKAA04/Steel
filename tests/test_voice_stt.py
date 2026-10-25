@@ -212,6 +212,54 @@ class RealLoaderIsOfflineTest(unittest.TestCase):
         self.assertEqual(kwargs["compute_type"], "int8")
 
 
+class OnnxTelemetryOffTest(unittest.TestCase):
+    """onnxruntime 1.31 sends Microsoft telemetry unless told not to (docs/VOICE.md 3)."""
+
+    def test_telemetry_is_off_before_faster_whisper_or_its_vad_loads(self) -> None:
+        import sys
+        import types
+
+        from steel.voice import stt
+
+        seen: list[str | None] = []
+
+        class Spy:
+            def __init__(self, *args: Any, **kwargs: Any) -> None:
+                seen.append(os.environ.get("ORT_DISABLE_TELEMETRY"))
+
+        def timestamps(*_: Any) -> list[Any]:
+            seen.append(os.environ.get("ORT_DISABLE_TELEMETRY"))
+            return []
+
+        whisper = types.ModuleType("faster_whisper")
+        whisper.WhisperModel = Spy  # type: ignore[attr-defined]
+        vad = types.ModuleType("faster_whisper.vad")
+        vad.VadOptions = lambda: None  # type: ignore[attr-defined]
+        vad.get_speech_timestamps = timestamps  # type: ignore[attr-defined]
+        modules = {"faster_whisper": whisper, "faster_whisper.vad": vad}
+        for loader in (
+            lambda: stt._load_whisper(Path("/models/faster-whisper-small")),
+            lambda: stt._find_speech([0.0]),
+        ):
+            # Even a value that says "on" is overridden.
+            with (
+                mock.patch.dict(sys.modules, modules),
+                mock.patch.dict(os.environ, {"ORT_DISABLE_TELEMETRY": "0"}),
+            ):
+                loader()
+        self.assertEqual(seen, ["1", "1"])
+
+    def test_every_steel_command_turns_it_off_at_start(self) -> None:
+        from steel import cli
+
+        with (
+            mock.patch.object(cli, "check_openjarvis_pin"),
+            mock.patch.dict(os.environ, {}, clear=True),
+        ):
+            cli._prepare()
+            self.assertEqual(os.environ["ORT_DISABLE_TELEMETRY"], "1")
+
+
 class NoDiskNoNetworkTest(unittest.TestCase):
     def test_transcribing_creates_no_file_and_opens_no_connection(self) -> None:
         import socket

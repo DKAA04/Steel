@@ -31,6 +31,10 @@ def _prepare() -> None:
     """Steps every command runs before touching OpenJarvis or the disk."""
     # Never ask PyPI for a newer OpenJarvis (no network check at start-up).
     os.environ.setdefault("OPENJARVIS_NO_UPDATE_CHECK", "1")
+    # No onnxruntime telemetry, in this process or any it starts (steel/offline.py).
+    from steel.offline import telemetry_off
+
+    telemetry_off()
     # Fail loudly on any OpenJarvis build other than the pinned one.
     check_openjarvis_pin()
 
