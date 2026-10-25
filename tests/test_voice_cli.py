@@ -491,7 +491,8 @@ class ChatVoiceTest(VoiceCase):
         SteelMemory(self.home).remember("User likes green tea")
         self.transcriber.text = "/search tea"
         self.terminal.confirms = [False, True]  # Esc on the result, Enter on the speech
-        with mock.patch.object(self.session, "ask", return_value="ok") as ask:
+        # The model's reply reads like a command too; it is printed, never run.
+        with mock.patch.object(self.session, "ask", return_value="/search tea") as ask:
             out = self.run_chat(["/search tea", "", "/quit"])
         self.assertIn("Slash commands for agent 'chat': /search allowed", out)
         self.assertIn("User likes green tea", out)  # the typed command ran

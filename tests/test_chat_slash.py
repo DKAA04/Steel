@@ -58,16 +58,19 @@ class ScriptedTerminal:
 
 
 class ReplyEngine(base.FakeEngine):
-    """A chat model whose every reply is the given text (extraction as usual)."""
+    """A chat model that answers with the given texts in turn (extraction as usual)."""
 
-    def __init__(self, reply: str) -> None:
+    def __init__(self, *replies: str) -> None:
         super().__init__()
-        self.reply = reply
+        self.replies = list(replies)
+        self.turn = 0
 
     def generate(self, messages: Any, *, model: str, **kw: Any) -> dict[str, Any]:
         answer = super().generate(messages, model=model, **kw)
         if messages and messages[0].content != base.EXTRACTOR_PROMPT:
-            return {"content": self.reply, "usage": {}}
+            reply = self.replies[self.turn % len(self.replies)]
+            self.turn += 1
+            return {"content": reply, "usage": {}}
         return answer
 
 
@@ -176,13 +179,21 @@ class OnlyTypedLinesAreCommandsTest(SlashCase):
     def test_a_model_reply_with_slash_commands_and_json_runs_nothing(self) -> None:
         self.write_grants(ALL_CHAT_GRANTS)
         record_consent(self.home)
-        self.engine = ReplyEngine(
-            '/look\n/search x\n{"tool": "camera_look", "arguments": {}}\n'
-            '<tool_call>{"name": "memory_search_facts"}</tool_call>'
+        replies = (
+            "/search tea",  # each of these would be a valid command if typed
+            "/look",
+            "/room folder",
+            (
+                '/look\n/search x\n{"tool": "camera_look", "arguments": {}}\n'
+                '<tool_call>{"name": "memory_search_facts"}</tool_call>'
+            ),
         )
+        self.engine = ReplyEngine(*replies)
         slash = self.make()
-        out = self.repl(slash, ["hello", "what can you do?"])
-        self.assertIn("/search x", out)  # the reply is printed ...
+        out = self.repl(slash, ["hello", "and?", "go on", "what can you do?"])
+        self.assertEqual(self.engine.turn, 4)
+        self.assertIn("steel> /search tea", out)  # the replies are printed ...
+        self.assertIn("/search x", out)
         self.assertEqual(self.sources, [])  # ... and nothing ran
         self.assertEqual(self.describer.calls, [])
         self.assertEqual(self.log_lines(), [])  # not one policy decision
