@@ -1,6 +1,6 @@
 # Voice (Phase 2c): push-to-talk, fully local
 
-**Status: implemented (Phase 2c), except where marked.** This document was written and committed *before* any audio code (see the git history), and the code was then built against it. Section 9 says, per claim, which test proves it, and what no test can prove. A claim without a named test there is not claimed. **Not implemented: the wake word (section 7), speech output with any engine other than a fake-tested `espeak-ng` call (section 5), and everything that needs the real microphone, which the test suite never opens.**
+**Status: implemented (Phase 2c), except where marked.** Spoken replies moved to their own design in Phase 5a: docs/SPEAK.md. This document was written and committed *before* any audio code (see the git history), and the code was then built against it. Section 9 says, per claim, which test proves it, and what no test can prove. A claim without a named test there is not claimed. **Not implemented: the wake word (section 7), and everything that needs the real microphone, which the test suite never opens.** Speech output is Phase 5a (docs/SPEAK.md); the earlier `espeak-ng` call is gone.
 
 Scope: push-to-talk speech input, and optional spoken replies. **No wake word and no always-on listening.** Nothing leaves the computer.
 
@@ -60,7 +60,7 @@ Twelve packages were added to `~/.openjarvis/.venv` (before: 509,668 KB; after: 
 | `faster-whisper` | 1.2.1 | 1.4 MB |
 | `protobuf`, `flatbuffers`, `cffi`, `pycparser`, `sounddevice` | 7.36.2, 25.12.19, 2.1.1, 3.12, 0.5.6 | under 2 MB together |
 
-`sounddevice` and `soundfile` arrive with the `[speech]` extra but **STEEL does not use them**: capture is `arecord` (section 6.1) and the optional spoken reply is `espeak-ng`. They can be uninstalled; nothing in STEEL imports them.
+`sounddevice` and `soundfile` arrive with the `[speech]` extra but **STEEL does not use them**: capture is `arecord` (section 6.1) and spoken replies use Piper as a separate program (docs/SPEAK.md). They can be uninstalled; nothing in STEEL imports them.
 
 Models (the one network download, done by hand with `huggingface_hub.snapshot_download`, telemetry off, pinned to a revision; the only files fetched are `config.json`, `model.bin`, `tokenizer.json`, `vocabulary.txt`). They live in `~/.openjarvis/steel_models/` (605 MiB in all; sizes in this document are MiB unless it says MB):
 
@@ -99,11 +99,7 @@ Measured on this machine (AMD Ryzen 5 5500U, `int8`, one utterance each, median 
 
 ## 5. Text to speech: the choice
 
-**Nothing local and good is installed, so spoken replies are an optional later step.** `steel chat --voice --speak` will use `espeak-ng` **if it is on the PATH** and otherwise print "no local text-to-speech installed" and carry on silently. `espeak-ng` is not installed here, so that code path can only be tested with a fake runner (stated again in section 9). The reply text is passed on standard input, not on the command line, so it does not appear in `ps`.
-
-Rejected for now: Kokoro (the local OpenJarvis choice) needs PyTorch, several GB, and fetches model files itself; Piper gives better voices than `espeak-ng` but is not installed and needs voice files per language. Both can replace `espeak-ng` later. `openai_tts` and `cartesia` are cloud services and are never used.
-
-Speech output is **not** behind a permission capability: the vocabulary has none for a speaker, and playing a reply reads nothing from the room. It does let anyone nearby hear the reply, which is the owner's choice by passing `--speak`. Whether it needs a capability is an open question (section 8).
+**Superseded in Phase 5a by docs/SPEAK.md.** Phase 2c had only an optional `espeak-ng` call (not installed, fake-tested) and no capability for the speaker. Phase 5a removed that call and added Piper, run as a separate program with no network, behind its own capability `audio:play` (tool `speak`, agent `voice`). `openai_tts`, `cartesia` and OpenJarvis' Kokoro backend are still never used.
 
 ## 6. Consent and privacy design
 
@@ -204,11 +200,10 @@ What it would need before it is built: a separate written consent that says "alw
 * **Transcripts reach the terminal.** `steel voice listen` and `steel chat --voice` print the transcript, so it ends up in the terminal's scrollback.
 * **Another program can record at the same time.** PipeWire allows several clients; the REC line shows only STEEL's own recording.
 * **The executor stops waiting** after the start-key wait, the maximum length and 90 s for the model; the recording itself ends far earlier, so the microphone is closed before that can happen.
-* **Spoken replies:** `espeak-ng` is not installed, so that path has only been tested with a fake. Nothing says whether a speaker needs a capability.
+* **Spoken replies:** see docs/SPEAK.md (Phase 5a). They are never played while recording: the chat loop speaks a reply only after the recording has ended.
 * **The transcript of a bystander** can be confirmed by mistake; nothing detects "this is not my voice".
-* **Speech output is not behind a capability** (section 5).
 * **The model directory is trusted.** A replaced `model.bin` would run as the owner. The SHA-256 values in section 3 are recorded so they can be compared by hand; STEEL does not check them.
-* Open questions for the owner: whether speaking needs a capability (a `sensor:speaker` or `audio:play` name), whether `steel wipe` should also offer to delete the consent file, whether the allowed-language default should stay `en,es,it`, and whether to keep both models.
+* Open questions for the owner: whether `steel wipe` should also offer to delete the consent file, whether the allowed-language default should stay `en,es,it`, and whether to keep both models.
 
 ## 9. Evidence
 
@@ -241,8 +236,8 @@ Test files: `tests/test_voice_core.py` (C), `test_voice_stt.py` (S), `test_voice
 | `steel voice check` opens no microphone, starts no process, writes nothing, changes no permission, and reports devices, backend, model, consent and grant | L `VoiceCheckTest.test_check_opens_no_microphone_and_starts_no_process`, `test_check_with_the_fake_source_never_opens_it`, `test_check_writes_nothing_not_even_a_decision_log`, `test_check_changes_no_permissions_and_creates_nothing`, `test_everything_in_place_is_ready`, `test_missing_consent_is_reported`, `test_a_missing_grant_is_reported_with_the_example_to_write_by_hand`, `test_an_invalid_grants_file_is_reported_as_everything_denied`, `test_a_missing_model_and_a_missing_capture_program_are_reported`; `CaptureDeviceListTest` |
 | Ctrl-C stops a recording and closes the microphone, even if the device stopped delivering audio | L `ListenCommandTest.test_ctrl_c_during_a_recording_stops_and_closes_the_microphone`; T `RecordingFlowTest.test_cancelling_from_another_thread_stops_and_closes_the_microphone`, `test_cancel_ends_a_recording_whose_device_stopped_delivering_audio`, `test_a_cancel_from_an_earlier_call_does_not_cancel_the_next_one` |
 | Two recordings cannot run at once | T `RecordingFlowTest.test_two_recordings_cannot_run_at_once` |
-| `chat --voice`: leaving still waits at most 30 s for fact extraction; a denied microphone does not stop the chat; `--speak` needs `--voice` | L `ChatVoiceTest.test_leaving_still_waits_for_fact_extraction_at_most_30_seconds`, `test_a_denied_microphone_is_reported_and_the_chat_goes_on`, `ChatVoiceCommandTest.test_speak_needs_voice`; `tests/test_close_wait.py` |
-| Replies are spoken only with `--speak` and a local backend; the text is passed on stdin, not on the command line (**fake runner only: `espeak-ng` is not installed**) | L `ChatVoiceTest.test_replies_are_spoken_only_with_speak_and_a_local_backend`, `test_speak_without_a_local_backend_says_so_and_stays_silent`, `SpeakerTest` |
+| `chat --voice`: leaving still waits at most 30 s for fact extraction; a denied microphone does not stop the chat | L `ChatVoiceTest.test_leaving_still_waits_for_fact_extraction_at_most_30_seconds`, `test_a_denied_microphone_is_reported_and_the_chat_goes_on`; `tests/test_close_wait.py` |
+| In voice chat a reply is spoken only with `--speak`, only the reply, and only after the microphone has closed (the rest of speaking: docs/SPEAK.md section 10) | L `ChatVoiceTest.test_replies_are_spoken_only_with_speak_after_the_recording` |
 | `scripts/voice_check.py` uses a scratch directory, writes consent and the grant only there, never into the real home, and deletes it, also on failure and Ctrl-C (**run with fakes; the live run is the owner's**) | X `ScriptTest.test_it_records_transcribes_prints_times_and_deletes_the_scratch`, `test_it_never_writes_a_consent_or_grants_file_into_the_real_home`, `test_the_scratch_holds_only_consent_grants_and_the_decision_log`, `test_a_failed_run_still_deletes_the_scratch`, `test_ctrl_c_still_deletes_the_scratch` |
 
 **Mutation checks (a small, hand-made sample).** 69 single-line changes to the voice code were made by hand, one at a time (REC line skipped, proof not checked, limits removed, close not called, consent checks removed, wipe removed, VAD removed, flags like `shell=True`, discarding that still sends, and so on), and the suite was run after each. 64 were caught at once; five survived (audio not wiped when reading fails, consent file not forced to mode 600, a stale cancel flag, a message that could leak an exception's text, `voice check` calling `harden()`); each now has its own test and is caught. A first run was invalid and was thrown away: a background process inherits SIGINT as ignored, which made the Ctrl-C test fail for every mutation; the test now installs the handler it needs. Four more mutations covered the cancel/close code added afterwards; one was only caught after another test was added. Mutation checks do not prove the absence of other bugs.
@@ -251,6 +246,5 @@ Test files: `tests/test_voice_core.py` (C), `test_voice_stt.py` (S), `test_voice
 
 * Anything with the **real microphone**: that `arecord -D default` records from PipeWire here, that `-d` and closing the pipe end it, that the level threshold suits the microphone, that the transcript is right. `scripts/voice_check.py` exists for that and has not been run. (The `arecord` command line itself was exercised once against the ALSA `null` device, which uses no hardware: 2 s gave 64,000 bytes.)
 * **Accuracy and speed of the real model** on the owner's voice and languages (section 4).
-* **`espeak-ng`** speaking (not installed).
 * The terminal behaviour in the owner's actual terminal emulator.
 * That nothing else in the process could open the microphone: the proof object and the consent check stop mistakes, not code that ignores them.

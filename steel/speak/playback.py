@@ -2,8 +2,8 @@
 
 Order, every time: show the SPEAKING line, then open the player, then pass the
 engine's audio to it in 4 KB chunks until the end or a stop, then stop both
-programs (in a ``finally``) and say so. The chunk buffer is overwritten with
-zeros after each write and at the end (best effort).
+programs (in a ``finally``) and say so. The one chunk buffer is reused for
+every chunk and overwritten with zeros at the end, on every path (best effort).
 """
 
 from __future__ import annotations
@@ -81,7 +81,6 @@ def play(
             if not count:
                 break  # the engine is done
             sink.write(view[:count])
-            buffer[:count] = bytes(count)
             played += count
             if played / (2 * rate) >= max_seconds:
                 reason = "limit"
