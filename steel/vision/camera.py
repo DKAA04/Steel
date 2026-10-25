@@ -24,6 +24,8 @@ from steel.vision.frame import Frame
 from steel.vision.indicator import CameraShown
 
 _DEVICE_RE = re.compile(r"/dev/video[0-9]{1,2}")
+# The longest warm-up: the largest setting plus the retry (steel/vision/config.py).
+MAX_SOURCE_WARMUP = 100
 
 
 class FfmpegCameraSource:
@@ -31,7 +33,7 @@ class FfmpegCameraSource:
         self,
         device: str = "/dev/video0",
         size: tuple[int, int] = (640, 480),
-        warmup_frames: int = 5,
+        warmup_frames: int = 20,
         timeout: float = 10.0,
         *,
         popen: Any = subprocess.Popen,
@@ -41,8 +43,8 @@ class FfmpegCameraSource:
             raise ValueError(
                 "the camera device must be /dev/video followed by a number"
             )
-        if not 0 <= warmup_frames <= 30:
-            raise ValueError("warmup_frames must be between 0 and 30")
+        if not 0 <= warmup_frames <= MAX_SOURCE_WARMUP:
+            raise ValueError(f"warmup_frames must be between 0 and {MAX_SOURCE_WARMUP}")
         self._device = device
         self._width, self._height = size
         self._warmup = warmup_frames

@@ -20,7 +20,15 @@ from voice_helpers import BrokenTTY, FakeTTY, NotATTY
 
 from steel.vision.camera import FfmpegCameraSource
 from steel.vision.capture import capture_one
-from steel.vision.config import DEFAULT_DEVICE, DEFAULT_MODEL, vision_config
+from steel.vision.config import (
+    BLACK_MEAN_BRIGHTNESS,
+    DEFAULT_DEVICE,
+    DEFAULT_MODEL,
+    DEFAULT_WARMUP_FRAMES,
+    MAX_WARMUP_FRAMES,
+    RETRY_EXTRA_FRAMES,
+    vision_config,
+)
 from steel.vision.consent import (
     CONSENT_TEXT,
     consent_path,
@@ -33,6 +41,7 @@ from steel.vision.frame import (
     Frame,
     downscale,
     encode_for_model,
+    mean_brightness,
     target_size,
     to_png,
 )
@@ -87,6 +96,13 @@ class FrameTest(unittest.TestCase):
         self.assertEqual(set(small.rgb[0::3]), {90})
         self.assertEqual(set(small.rgb[1::3]), {120})
         self.assertEqual(set(small.rgb[2::3]), {30})
+
+    def test_mean_brightness_tells_black_from_a_dim_picture(self) -> None:
+        black = make_frame(64, 48, left=(0, 0, 0), right=(3, 2, 1))
+        dim = make_frame(64, 48, left=(30, 25, 20), right=(10, 10, 10))
+        self.assertLessEqual(mean_brightness(black), BLACK_MEAN_BRIGHTNESS)
+        self.assertGreater(mean_brightness(dim), BLACK_MEAN_BRIGHTNESS)
+        self.assertAlmostEqual(mean_brightness(make_frame(4, 2)), 400 / 6)
 
     def test_wipe_overwrites_the_pixels_with_zeros(self) -> None:
         frame = make_frame(8, 8)
@@ -324,6 +340,30 @@ class ConfigTest(unittest.TestCase):
                 vision_config({"STEEL_CAMERA_DEVICE": bad}).device, DEFAULT_DEVICE, bad
             )
 
+    def test_the_warm_up_is_about_20_frames_and_can_be_set(self) -> None:
+        self.assertEqual(DEFAULT_WARMUP_FRAMES, 20)
+        self.assertEqual(vision_config({}).warmup_frames, 20)
+        self.assertEqual(
+            vision_config({"STEEL_CAMERA_WARMUP_FRAMES": "45"}).warmup_frames, 45
+        )
+        self.assertEqual(
+            vision_config({"STEEL_CAMERA_WARMUP_FRAMES": "0"}).warmup_frames, 0
+        )
+
+    def test_a_bad_warm_up_falls_back_to_the_default(self) -> None:
+        for bad in ("-1", "61", "2.5", "lots", "1e3", " ", "nan"):
+            self.assertEqual(
+                vision_config({"STEEL_CAMERA_WARMUP_FRAMES": bad}).warmup_frames,
+                DEFAULT_WARMUP_FRAMES,
+                bad,
+            )
+
+    def test_the_source_accepts_the_longest_warm_up_with_its_retry(self) -> None:
+        longest = MAX_WARMUP_FRAMES + RETRY_EXTRA_FRAMES
+        FfmpegCameraSource("/dev/video0", warmup_frames=longest)
+        with self.assertRaises(ValueError):
+            FfmpegCameraSource("/dev/video0", warmup_frames=longest + 1)
+
     def test_a_model_name_with_paths_or_options_falls_back(self) -> None:
         for bad in ("../x", "-x", "a b", "a;b", "", "x" * 80, "a/../b"):
             self.assertEqual(
@@ -402,7 +442,7 @@ class FfmpegCameraSourceTest(unittest.TestCase):
 
     def test_the_command_is_a_list_with_no_file_and_one_frame(self) -> None:
         spawn = _Spawn()
-        source = FfmpegCameraSource("/dev/video0", (640, 480), 5, popen=spawn)
+        source = FfmpegCameraSource("/dev/video0", (640, 480), 20, popen=spawn)
         source.open(proof())
         command, kwargs = spawn.calls[0]
         self.assertIsInstance(command, list)
@@ -411,7 +451,7 @@ class FfmpegCameraSourceTest(unittest.TestCase):
         self.assertEqual(command[command.index("-frames:v") + 1], "1")
         self.assertEqual(command[command.index("-i") + 1], "/dev/video0")
         self.assertEqual(command[command.index("-video_size") + 1], "640x480")
-        self.assertIn("select=eq(n\\,5)", command)  # the sixth frame, after warm-up
+        self.assertIn("select=eq(n\\,20)", command)  # 20 frames dropped first
         self.assertNotIn("shell", kwargs)
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
         # Nothing in the command can name an output file.

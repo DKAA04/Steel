@@ -35,6 +35,13 @@ class Frame:
         self.rgb[:] = bytes(len(self.rgb))
 
 
+def mean_brightness(frame: Frame) -> float:
+    """Average of every red, green and blue byte, from 0 (black) to 255 (white)."""
+    np = importlib.import_module("numpy")
+    # frombuffer shares the frame's memory: no copy of the picture is made.
+    return float(np.frombuffer(frame.rgb, dtype=np.uint8).mean())
+
+
 def target_size(width: int, height: int, max_side: int) -> tuple[int, int]:
     """The size with the longest side at most *max_side*; never enlarged."""
     longest = max(width, height)

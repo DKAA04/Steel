@@ -65,5 +65,9 @@ class CameraIndicator:
     def closed(self, seconds: float) -> None:
         self._line(f"■ camera closed after {seconds:.1f} s")
 
+    def retrying(self) -> None:
+        # Said before the second CAMERA OPEN line, so the owner knows why.
+        self._line("■ the picture was black; looking once more with a longer warm-up")
+
     def failed(self) -> None:
         self._line("■ the camera did not open; no picture was taken")

@@ -120,7 +120,7 @@ def run(
     *,
     ask: Callable[[str], str] = input,
     is_terminal: Callable[[], bool] = lambda: sys.stdin.isatty(),
-    open_source: Callable[[], Any] | None = None,
+    open_source: Callable[[int], Any] | None = None,
     indicator: Any = None,
     list_models: Callable[[str], list[str]] | None = None,
     describer_for: Callable[[Any, str], Any] | None = None,

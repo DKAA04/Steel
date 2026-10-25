@@ -23,10 +23,10 @@ from voice_helpers import FakeTTY
 from steel.security import PolicyError, load_home_policy
 from steel.security.executor import build_executor
 from steel.tools import CAMERA_TOOL, get_camera_tool
-from steel.vision.config import VisionConfig
+from steel.vision.config import RETRY_EXTRA_FRAMES, VisionConfig
 from steel.vision.consent import record_consent, revoke_consent
 from steel.vision.describe import DATA_LINE, VisionUnavailable
-from steel.vision.indicator import CameraIndicator
+from steel.vision.indicator import OPEN_LINE, CameraIndicator
 
 GRANTS = "steel_policy.json"
 LOG = "steel_policy_audit.jsonl"
@@ -51,6 +51,7 @@ class VisionCase(base.HomeTestCase):
         self.screen = FakeTTY()
         self.describer = FakeDescriber(SECRET_SCENE)
         self.sources: list[FakeFrameSource] = []
+        self.warmups: list[int] = []  # warm-up frames asked of each source
         self.frame = lambda: make_frame(1280, 720)
 
     def write_grants(self, data: object) -> None:
@@ -58,9 +59,10 @@ class VisionCase(base.HomeTestCase):
         path.write_text(data if isinstance(data, str) else json.dumps(data))
         path.chmod(0o600)
 
-    def open_source(self) -> FakeFrameSource:
+    def open_source(self, warmup: int = 0) -> FakeFrameSource:
         source = FakeFrameSource(self.frame(), screen=self.screen)
         self.sources.append(source)
+        self.warmups.append(warmup)
         return source
 
     def tool(self, **overrides: Any) -> Any:
@@ -525,9 +527,9 @@ class BusyAndCancelTest(VisionCase):
         tool = self.tool()
         real_open = self.open_source
 
-        def cancelling() -> FakeFrameSource:
+        def cancelling(warmup: int) -> FakeFrameSource:
             tool.cancel()
-            return real_open()
+            return real_open(warmup)
 
         tool._open_source = cancelling
         result = self.look(tool=tool)
@@ -538,12 +540,74 @@ class BusyAndCancelTest(VisionCase):
     def test_a_camera_that_cannot_be_read_is_a_plain_failure(self) -> None:
         self.allow_everything()
         tool = self.tool(
-            open_source=lambda: FakeFrameSource(fail_read=OSError("/dev/video0 busy"))
+            open_source=lambda _warmup: FakeFrameSource(
+                fail_read=OSError("/dev/video0 busy")
+            )
         )
         result = self.look(tool=tool)
         self.assertFalse(result.success)
         self.assertNotIn("/dev/video0", result.content)
         self.assertEqual(self.describer.calls, [])
+
+
+def black_frame() -> Any:
+    return make_frame(640, 480, left=(0, 0, 0), right=(2, 1, 0))
+
+
+class BlackFrameTest(VisionCase):
+    """A camera whose exposure has not settled gives a black first picture."""
+
+    def scripted(self, *frames: Any) -> None:
+        queue = list(frames)
+        self.frame = lambda: queue.pop(0)
+
+    def test_a_normal_picture_is_taken_once_with_the_default_warm_up(self) -> None:
+        self.allow_everything()
+        result = self.look()
+        self.assertTrue(result.success, result.content)
+        self.assertEqual(self.warmups, [20])
+        self.assertEqual(self.screen.getvalue().count(OPEN_LINE), 1)
+        self.assertNotIn("black", self.screen.getvalue())
+        self.assertEqual(len(self.describer.calls), 1)
+
+    def test_a_black_picture_is_retried_once_with_a_longer_warm_up(self) -> None:
+        self.allow_everything()
+        self.scripted(black_frame(), make_frame(640, 480))
+        result = self.look()
+        self.assertTrue(result.success, result.content)
+        self.assertEqual(self.warmups, [20, 20 + RETRY_EXTRA_FRAMES])
+        self.assertEqual([s.opened for s in self.sources], [1, 1])
+        self.assertEqual([s.closed for s in self.sources], [1, 1])
+        screen = self.screen.getvalue()
+        # Honest indicator: the first camera closes, the reason is said, and the
+        # second opening gets its own CAMERA OPEN line before the camera opens.
+        self.assertEqual(screen.count(OPEN_LINE), 2)
+        first_closed = screen.index("camera closed after")
+        retry = screen.index("the picture was black; looking once more")
+        self.assertLess(first_closed, retry)
+        self.assertLess(retry, screen.rindex(OPEN_LINE))
+        self.assertEqual(self.sources[1].screen_at_open.count(OPEN_LINE), 2)
+        self.assertEqual(len(self.describer.calls), 1)  # only the good picture
+        for source in self.sources:
+            self.assertEqual(set(source.given.rgb), {0})  # both frames wiped
+
+    def test_a_black_picture_twice_never_reaches_the_vision_model(self) -> None:
+        self.allow_everything()
+        self.scripted(black_frame(), black_frame())
+        result = self.look()
+        self.assertFalse(result.success)
+        self.assertIn("the camera returned a black picture", result.content.lower())
+        self.assertIn("vision model was not asked", result.content)
+        self.assertEqual(self.describer.calls, [])
+        self.assertEqual(len(self.sources), 2)  # one retry, never a third try
+        self.assertEqual(self.screen.getvalue().count(OPEN_LINE), 2)
+        self.assertEqual(self.screen.getvalue().count("camera closed after"), 2)
+
+    def test_a_dim_picture_is_not_mistaken_for_black(self) -> None:
+        self.allow_everything()
+        self.scripted(make_frame(640, 480, left=(20, 18, 15), right=(9, 9, 9)))
+        self.assertTrue(self.look().success)
+        self.assertEqual(len(self.sources), 1)
 
 
 if __name__ == "__main__":

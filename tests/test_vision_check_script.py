@@ -51,7 +51,7 @@ class ScriptTest(base.HomeTestCase):
         self.sources: list[FakeFrameSource] = []
         self.installed = ["qwen2.5vl:3b", "qwen3.5:2b"]
 
-    def open_source(self) -> FakeFrameSource:
+    def open_source(self, warmup: int = 0) -> FakeFrameSource:
         source = FakeFrameSource(make_frame(640, 480), screen=self.screen)
         self.sources.append(source)
         return source
@@ -174,7 +174,7 @@ class ScriptTest(base.HomeTestCase):
         self.assertEqual((self.scratches, self.sources), ([], []))
 
     def test_a_camera_that_fails_still_deletes_the_scratch(self) -> None:
-        def broken() -> FakeFrameSource:
+        def broken(_warmup: int) -> FakeFrameSource:
             return FakeFrameSource(fail_read=OSError("busy"))
 
         self.assertEqual(self.run_script(open_source=broken), 1)

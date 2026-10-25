@@ -81,7 +81,7 @@ def get_camera_tool(
     home: Path,
     *,
     config: VisionConfig | None = None,
-    open_source: Callable[[], FrameSource] | None = None,
+    open_source: Callable[[int], FrameSource] | None = None,
     describer: Describer | None = None,
     indicator: CameraIndicator | None = None,
     ollama_host: str = "",
@@ -94,10 +94,14 @@ def get_camera_tool(
     """
     config = config or vision_config()
     if open_source is None:
-        device, size = config.device, config.capture_size
-        warmup, timeout = config.warmup_frames, config.capture_timeout
+        # The tool passes the warm-up: the default first, more for the one retry.
+        device, size, timeout = (
+            config.device,
+            config.capture_size,
+            config.capture_timeout,
+        )
 
-        def open_source() -> FrameSource:
+        def open_source(warmup: int) -> FrameSource:
             from steel.vision.camera import FfmpegCameraSource
 
             return FfmpegCameraSource(device, size, warmup, timeout)

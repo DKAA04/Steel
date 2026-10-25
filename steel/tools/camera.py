@@ -25,7 +25,12 @@ from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
 
 from steel.vision.capture import capture_one
-from steel.vision.config import MAX_QUESTION_CHARS, VisionConfig
+from steel.vision.config import (
+    BLACK_MEAN_BRIGHTNESS,
+    MAX_QUESTION_CHARS,
+    RETRY_EXTRA_FRAMES,
+    VisionConfig,
+)
 from steel.vision.consent import has_consent
 from steel.vision.describe import (
     DATA_LINE,
@@ -34,7 +39,7 @@ from steel.vision.describe import (
     VisionUnavailable,
     clean_description,
 )
-from steel.vision.frame import encode_for_model
+from steel.vision.frame import encode_for_model, mean_brightness
 from steel.vision.indicator import CameraIndicator, CameraIndicatorError
 from steel.vision.source import FrameSource
 
@@ -69,7 +74,7 @@ class CameraLook(BaseTool):
         *,
         home: Path,
         config: VisionConfig,
-        open_source: Callable[[], FrameSource],
+        open_source: Callable[[int], FrameSource],
         describer: Describer,
         indicator: CameraIndicator,
     ) -> None:
@@ -153,24 +158,27 @@ class CameraLook(BaseTool):
             self._busy.release()
 
     def _look(self, question: str) -> ToolResult:
-        source = self._live = self._open_source()
-        try:
-            capture = capture_one(source, self._indicator)
-        except CameraIndicatorError as exc:
-            return self._failed(f"No picture taken: {exc}.")
-        except OSError:
-            return self._failed("The camera could not be opened or read.")
-        finally:
-            self._live = None
-        frame = capture.frame
-        try:
-            if self._cancel.is_set():
-                return self._failed("Cancelled.")
-            image, size = encode_for_model(frame, self._config.max_side)
-        except Exception:  # noqa: BLE001 - never put picture-derived text in a message
-            return self._failed("The picture could not be prepared.")
-        finally:
-            frame.wipe()  # also on every early return above
+        warmup = self._config.warmup_frames
+        first = self._capture(warmup)
+        if isinstance(first, ToolResult):
+            return first
+        seconds, picture = first
+        if picture is None:
+            # Most often the auto-exposure had not settled yet. One more try, in
+            # the same command; capture_one prints a second CAMERA OPEN line.
+            self._indicator.retrying()
+            second = self._capture(warmup + RETRY_EXTRA_FRAMES)
+            if isinstance(second, ToolResult):
+                return second
+            more, picture = second
+            seconds += more
+            if picture is None:
+                return self._failed(
+                    "The camera returned a black picture, twice (is the lens "
+                    "covered, the shutter closed or the room dark?). The vision "
+                    "model was not asked."
+                )
+        image, size = picture
         started = time.perf_counter()
         try:
             text = clean_description(self._describer.describe(image, question))
@@ -187,12 +195,40 @@ class CameraLook(BaseTool):
             content=f"{DATA_LINE}\n{text}",
             metadata={
                 "image_size": f"{size[0]}x{size[1]}",
-                "capture_seconds": round(capture.seconds, 1),
+                "capture_seconds": round(seconds, 1),
                 "model_seconds": round(time.perf_counter() - started, 1),
                 "flagged": looks_like_injection(text),
                 "model": self._config.model,
             },
         )
+
+    def _capture(
+        self, warmup: int
+    ) -> ToolResult | tuple[float, tuple[str, tuple[int, int]] | None]:
+        """One capture: (seconds open, (picture, size) or None if black), or a failure.
+
+        The raw frame is wiped here, whatever happens.
+        """
+        source = self._live = self._open_source(warmup)
+        try:
+            capture = capture_one(source, self._indicator)
+        except CameraIndicatorError as exc:
+            return self._failed(f"No picture taken: {exc}.")
+        except OSError:
+            return self._failed("The camera could not be opened or read.")
+        finally:
+            self._live = None
+        frame = capture.frame
+        try:
+            if self._cancel.is_set():
+                return self._failed("Cancelled.")
+            if mean_brightness(frame) <= BLACK_MEAN_BRIGHTNESS:
+                return capture.seconds, None
+            return capture.seconds, encode_for_model(frame, self._config.max_side)
+        except Exception:  # noqa: BLE001 - never put picture-derived text in a message
+            return self._failed("The picture could not be prepared.")
+        finally:
+            frame.wipe()  # also on every early return above
 
     def _failed(self, message: str) -> ToolResult:
         return ToolResult(tool_name=CAMERA_TOOL, content=message, success=False)
