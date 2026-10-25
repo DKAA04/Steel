@@ -124,6 +124,7 @@ def run(
     is_terminal: Callable[[], bool] = lambda: sys.stdin.isatty(),
     open_source: Callable[[int], Any] | None = None,
     indicator: Any = None,
+    start_key: Any = None,
     list_models: Callable[[str], list[str]] | None = None,
     describer_for: Callable[[Any, str], Any] | None = None,
     echo: Callable[[str], None] = print,
@@ -226,11 +227,12 @@ def run(
             open_source=open_source,
             describer=compare,
             indicator=indicator,
+            start_key=start_key,
         )
         executor = build_executor(
             [tool], policy=load_home_policy(scratch), agent_id=VISION_AGENT
         )
-        echo("\nLooking now: the camera opens once, for about a second.")
+        echo("\nThe camera opens once, for about a second, after you press Enter.")
         started = time.perf_counter()
         try:
             result = look_once(executor, tool, args.question)

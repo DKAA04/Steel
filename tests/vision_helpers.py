@@ -102,6 +102,25 @@ class FakeDescriber:
         return self.text
 
 
+class FakeStartKey:
+    """Stands in for the Enter key that takes the picture.
+
+    Records how often it was asked and what the screen showed at that moment.
+    """
+
+    def __init__(self, answer: bool = True, screen: io.StringIO | None = None) -> None:
+        self.answer = answer
+        self.screen = screen
+        self.asked = 0
+        self.screen_when_asked: list[str] = []
+
+    def wait_for_start(self, timeout: float) -> bool:
+        self.asked += 1
+        if self.screen is not None:
+            self.screen_when_asked.append(self.screen.getvalue())
+        return self.answer
+
+
 class FakeConfirm:
     """Stands in for the Enter/Esc key: answers True or False and counts asks."""
 

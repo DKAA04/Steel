@@ -17,7 +17,13 @@ from unittest import mock
 
 import test_steel as base
 from openjarvis.core.types import ToolCall, ToolResult
-from vision_helpers import FakeDescriber, FakeFrameSource, decode_png, make_frame
+from vision_helpers import (
+    FakeDescriber,
+    FakeFrameSource,
+    FakeStartKey,
+    decode_png,
+    make_frame,
+)
 from voice_helpers import FakeTTY
 
 from steel.security import PolicyError, load_home_policy
@@ -52,6 +58,7 @@ class VisionCase(base.HomeTestCase):
         self.describer = FakeDescriber(SECRET_SCENE)
         self.sources: list[FakeFrameSource] = []
         self.warmups: list[int] = []  # warm-up frames asked of each source
+        self.start_key = FakeStartKey(True, self.screen)  # the owner presses Enter
         self.frame = lambda: make_frame(1280, 720)
 
     def write_grants(self, data: object) -> None:
@@ -71,6 +78,7 @@ class VisionCase(base.HomeTestCase):
             "open_source": self.open_source,
             "describer": self.describer,
             "indicator": CameraIndicator(self.screen),
+            "start_key": self.start_key,
         }
         options.update(overrides)
         return get_camera_tool(self.home, **options)
@@ -608,6 +616,63 @@ class BlackFrameTest(VisionCase):
         self.scripted(make_frame(640, 480, left=(20, 18, 15), right=(9, 9, 9)))
         self.assertTrue(self.look().success)
         self.assertEqual(len(self.sources), 1)
+
+
+class StartKeyTest(VisionCase):
+    """Like the microphone: nothing opens until the owner presses Enter."""
+
+    def test_enter_is_asked_before_the_camera_open_line_and_the_camera(self) -> None:
+        self.allow_everything()
+        self.assertTrue(self.look().success)
+        self.assertEqual(self.start_key.asked, 1)
+        self.assertEqual(self.start_key.screen_when_asked, [""])  # nothing shown yet
+        self.assertIn(OPEN_LINE, self.screen.getvalue())
+
+    def test_without_enter_the_camera_stays_closed(self) -> None:
+        self.allow_everything()
+        self.start_key.answer = False
+        result = self.look()
+        self.assertFalse(result.success)
+        self.assertIn("Enter was not pressed", result.content)
+        self.assertEqual((self.sources, self.screen.getvalue()), ([], ""))
+        self.assertEqual(self.describer.calls, [])
+
+    def test_a_denied_look_or_one_without_consent_never_asks_for_enter(self) -> None:
+        record_consent(self.home)
+        self.assertFalse(self.look().success)  # no grant
+        self.write_grants(eyes_grant())
+        revoke_consent(self.home)
+        self.assertFalse(self.look().success)  # no consent
+        self.assertEqual(self.start_key.asked, 0)
+
+    def test_the_black_picture_retry_needs_no_second_enter(self) -> None:
+        self.allow_everything()
+        frames = [black_frame(), make_frame(640, 480)]
+        self.frame = lambda: frames.pop(0)
+        self.assertTrue(self.look().success)
+        self.assertEqual((self.start_key.asked, len(self.sources)), (1, 2))
+
+    def test_the_real_key_says_take_one_picture_and_needs_a_terminal(self) -> None:
+        from steel.vision.startkey import GAVE_UP, PROMPT, PictureKey
+        from steel.voice.terminal import Terminal
+
+        self.assertEqual(PROMPT, "Press Enter to take one picture, Ctrl-C cancels. ")
+        self.assertIn("camera was not opened", GAVE_UP)
+        read_end, write_end = os.pipe()  # a pipe, not a terminal
+        self.addCleanup(os.close, read_end)
+        self.addCleanup(os.close, write_end)
+        os.write(write_end, b"\n")
+        out = FakeTTY()
+        self.assertFalse(PictureKey(Terminal(read_end, out)).wait_for_start(1))
+        self.assertEqual(out.getvalue(), "")
+
+    def test_the_default_tool_uses_the_picture_key(self) -> None:
+        from steel.vision.startkey import PictureKey
+
+        tool = get_camera_tool(
+            self.home, describer=self.describer, indicator=CameraIndicator(self.screen)
+        )
+        self.assertIsInstance(tool._start_key, PictureKey)
 
 
 if __name__ == "__main__":

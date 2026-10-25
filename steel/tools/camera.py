@@ -7,7 +7,9 @@ read it also needs the consent file and a terminal for the CAMERA OPEN line.
 
 It takes one optional argument, a question about the room, and returns TEXT: a
 fixed "this is data" line followed by the model's description. The picture is
-never returned and never kept: the raw frame is wiped in a ``finally``. No
+never returned and never kept: the raw frame is wiped in a ``finally``. The
+owner's Enter key (``start_key``) comes before the CAMERA OPEN line, like the
+microphone's start key; a black-picture retry needs no second key. No
 description, question or picture reaches the decision log, and no event bus is
 attached by the commands that run it.
 """
@@ -19,7 +21,7 @@ import time
 import unicodedata
 from collections.abc import Callable
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 from openjarvis.core.types import ToolResult
 from openjarvis.tools._stubs import BaseTool, ToolSpec
@@ -65,6 +67,12 @@ def valid_question(question: str) -> bool:
     )
 
 
+class StartKey(Protocol):
+    """The owner's Enter key (steel/vision/startkey.py), or a fake in tests."""
+
+    def wait_for_start(self, timeout: float) -> bool: ...
+
+
 class CameraLook(BaseTool):
     tool_id = CAMERA_TOOL
     is_local = True
@@ -77,12 +85,14 @@ class CameraLook(BaseTool):
         open_source: Callable[[int], FrameSource],
         describer: Describer,
         indicator: CameraIndicator,
+        start_key: StartKey,
     ) -> None:
         self._home = home
         self._config = config
         self._open_source = open_source
         self._describer = describer
         self._indicator = indicator
+        self._start_key = start_key
         self._cancel = threading.Event()
         self._busy = threading.Lock()
         self._live: FrameSource | None = None  # the source of a capture in progress
@@ -158,6 +168,13 @@ class CameraLook(BaseTool):
             self._busy.release()
 
     def _look(self, question: str) -> ToolResult:
+        # After the policy and the consent check, as for the microphone: a
+        # denied look never asks for the key.
+        if not self._start_key.wait_for_start(self._config.start_wait_seconds):
+            return self._failed(
+                "No picture taken: Enter was not pressed at a terminal, so the "
+                "camera stayed closed."
+            )
         warmup = self._config.warmup_frames
         first = self._capture(warmup)
         if isinstance(first, ToolResult):

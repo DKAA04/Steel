@@ -9,7 +9,7 @@ from pathlib import Path
 from openjarvis.tools._stubs import BaseTool
 
 from steel.memory import SteelMemory
-from steel.tools.camera import CAMERA_TOOL, CameraLook
+from steel.tools.camera import CAMERA_TOOL, CameraLook, StartKey
 from steel.tools.memory_search import MemorySearchFacts, MemorySearchNotes
 from steel.tools.microphone import (
     MICROPHONE_TOOL,
@@ -21,6 +21,7 @@ from steel.vision.config import VisionConfig, vision_config
 from steel.vision.describe import Describer
 from steel.vision.indicator import CameraIndicator
 from steel.vision.source import FrameSource
+from steel.vision.startkey import PictureKey
 from steel.voice.config import VoiceConfig, voice_config
 from steel.voice.indicator import Indicator
 from steel.voice.source import AudioSource
@@ -84,6 +85,7 @@ def get_camera_tool(
     open_source: Callable[[int], FrameSource] | None = None,
     describer: Describer | None = None,
     indicator: CameraIndicator | None = None,
+    start_key: StartKey | None = None,
     ollama_host: str = "",
 ) -> CameraLook:
     """The camera tool, wired to the real terminal, ``ffmpeg`` and a local Ollama.
@@ -117,6 +119,7 @@ def get_camera_tool(
         open_source=open_source,
         describer=describer,
         indicator=indicator or CameraIndicator(),
+        start_key=start_key or PictureKey(),
     )
 
 

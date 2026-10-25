@@ -413,6 +413,21 @@ class TerminalTest(unittest.TestCase):
         self.assertTrue(self.terminal.wait_for_start(timeout=5))
         self.assertIn("Press Enter to start", self.out.getvalue())
 
+    def test_the_camera_prompt_is_its_own(self) -> None:
+        from steel.vision.startkey import PictureKey
+
+        self.press_soon(b"\n")
+        self.assertTrue(PictureKey(self.terminal).wait_for_start(timeout=5))
+        self.assertIn(
+            "Press Enter to take one picture, Ctrl-C cancels.", self.out.getvalue()
+        )
+        self.assertNotIn("recording", self.out.getvalue())
+        self.out.truncate(0)
+        self.out.seek(0)
+        self.assertFalse(PictureKey(self.terminal).wait_for_start(timeout=0.2))
+        self.assertIn("the camera was not opened", self.out.getvalue())
+        self.assertNotIn("microphone", self.out.getvalue())
+
     def test_no_key_means_no_start(self) -> None:
         self.assertFalse(self.terminal.wait_for_start(timeout=0.2))
         self.assertIn("was not opened", self.out.getvalue())

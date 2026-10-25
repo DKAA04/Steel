@@ -41,8 +41,17 @@ class Terminal:
         """Note that the owner just pressed Enter at a prompt (the chat's)."""
         self._armed_at = time.monotonic()
 
-    def wait_for_start(self, timeout: float) -> bool:
-        """Block until the owner presses Enter. False on timeout or no terminal."""
+    def wait_for_start(
+        self,
+        timeout: float,
+        *,
+        prompt: str = "Press Enter to start recording (Ctrl-C cancels). ",
+        gave_up: str = "No key pressed; the microphone was not opened.",
+    ) -> bool:
+        """Block until the owner presses Enter. False on timeout or no terminal.
+
+        *prompt* and *gave_up* are what the owner reads: the camera has its own.
+        """
         if not self._usable():
             return False
         armed, self._armed_at = self._armed_at, None
@@ -50,11 +59,11 @@ class Terminal:
             self._flush_typeahead()
             return True
         self._flush_typeahead()
-        self._out.write("Press Enter to start recording (Ctrl-C cancels). ")
+        self._out.write(prompt)
         self._out.flush()
         ready, _, _ = select.select([self._fd], [], [], timeout)
         if not ready:
-            self._out.write("\nNo key pressed; the microphone was not opened.\n")
+            self._out.write(f"\n{gave_up}\n")
             self._out.flush()
             return False
         os.read(self._fd, 4096)  # the line that was typed

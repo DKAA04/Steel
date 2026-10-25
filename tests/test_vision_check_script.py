@@ -11,7 +11,13 @@ from typing import Any
 from unittest import mock
 
 import test_steel as base
-from vision_helpers import FakeDescriber, FakeFrameSource, decode_png, make_frame
+from vision_helpers import (
+    FakeDescriber,
+    FakeFrameSource,
+    FakeStartKey,
+    decode_png,
+    make_frame,
+)
 from voice_helpers import FakeTTY
 
 from steel.vision.indicator import CameraIndicator
@@ -62,6 +68,7 @@ class ScriptTest(base.HomeTestCase):
             "is_terminal": lambda: True,
             "open_source": self.open_source,
             "indicator": CameraIndicator(self.screen),
+            "start_key": FakeStartKey(True),
             "list_models": lambda _host: self.installed,
             "describer_for": lambda _config, name: self.describers[name],
             "echo": self.lines.append,
