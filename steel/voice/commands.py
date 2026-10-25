@@ -33,7 +33,6 @@ from steel.voice.consent import (
     record_consent,
     revoke_consent,
 )
-from steel.voice.speak import EspeakSpeaker, find_speaker
 from steel.voice.stt import model_dir
 from steel.voice.terminal import Terminal
 
@@ -114,15 +113,7 @@ def voice_check(home: Path, *, pcm_list: Path | None = None) -> int:
     print(f"languages: {languages}; at most {config.max_seconds:g} s per recording")
     print(f'vocabulary hint: "{config.hint}" (set STEEL_VOICE_HINT to add names)')
 
-    speaker = find_speaker()
-    print(
-        "text to speech: "
-        + (
-            "espeak-ng found"
-            if speaker
-            else "none installed (replies stay silent even with --speak)"
-        )
-    )
+    print("text to speech: spoken replies are separate, see: steel speak check")
     for name in ("OPENAI_API_KEY", "DEEPGRAM_API_KEY", "CARTESIA_API_KEY"):
         if os.environ.get(name):
             print(
@@ -259,7 +250,7 @@ def run_voice_repl(
     speak: bool = False,
     terminal: Terminal | None = None,
     tool: Any = None,
-    speaker: EspeakSpeaker | None = None,
+    speaker: Any = None,
     slash: SlashCommands | None = None,
 ) -> int:
     """``steel chat --voice``. An empty line means "speak"; typing still works.
@@ -267,7 +258,8 @@ def run_voice_repl(
     The transcript is shown first. Enter sends it through ``session.ask`` (the
     same path as typed text: guardrails, user-only fact extraction); Esc discards
     it, and a discarded transcript is never passed on. A TYPED line that starts
-    with "/" is a slash command (docs/INJECTION.md); a transcript never is.
+    with "/" is a slash command (docs/INJECTION.md); a transcript never is. With
+    ``speak`` each reply is read aloud (docs/SPEAK.md), never while recording.
     """
     terminal = terminal or Terminal()
     slash = slash or build_slash(home, session, terminal)
@@ -275,30 +267,36 @@ def run_voice_repl(
     executor = _executor(home, tool)
     if not speak:
         speaker = None  # replies are spoken only when --speak was passed
-    else:
-        speaker = speaker or find_speaker()
-        if speaker is None:
-            print(
-                "No local text-to-speech is installed (espeak-ng); replies stay silent."
-            )
+    elif speaker is None:
+        from steel.speak.commands import ChatSpeaker
+
+        speaker = ChatSpeaker(home)
     print(f"STEEL chat (voice) - model {session.model}. The model cannot run tools.")
     print("Press Enter on an empty line to speak, or type a message.")
     print(LEAVE_HINT)
     print(banner(slash))
+    if speaker is not None:
+        from steel.speak.commands import REMINDER
+
+        print(REMINDER)
     if session.service is None:
         print("Automatic memory is OFF ([memory] enabled = false).")
+    pending: str | None = None  # typed while a reply was being spoken
     try:
         while True:
-            try:
-                line = input("you> ").strip()
-            except EOFError:
-                break
+            if pending is not None:
+                line, pending = pending.strip(), None
+                print(f"you> {line}")
+            else:
+                try:
+                    line = input("you> ").strip()
+                except EOFError:
+                    break
             if is_leave_line(line):  # the typed line only, never a transcript
                 break
             if line.startswith("/"):
                 slash.handle(line)  # typed by the owner; never a transcript
                 continue
-            language: str | None = None
             if line:
                 text = line
             else:
@@ -315,7 +313,6 @@ def run_voice_repl(
                 if not text:
                     print("Nothing heard.")
                     continue
-                language = result.metadata.get("language")
                 print(f'You said: "{text}"')
                 print("Enter = send, Esc = discard")
                 if not terminal.confirm():
@@ -324,7 +321,7 @@ def run_voice_repl(
             reply = session.ask(text)
             print("steel>", reply)
             if speaker is not None:
-                speaker.say(reply, language)
+                pending = speaker.say(reply)  # after the recording, never during
     except KeyboardInterrupt:
         print()
     finally:

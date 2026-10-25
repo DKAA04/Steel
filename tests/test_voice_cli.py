@@ -37,7 +37,6 @@ from steel.voice.commands import (
 )
 from steel.voice.config import VoiceConfig
 from steel.voice.consent import CONSENT_TEXT, consent_path, has_consent, record_consent
-from steel.voice.speak import EspeakSpeaker, find_speaker
 
 PCM_SAMPLE = (
     "00-03: HDMI 0 : HDMI 0 : playback 1\n"
@@ -93,9 +92,6 @@ class VoiceCheckTest(CliCase):
         )
         stack.enter_context(
             mock.patch.object(commands.shutil, "which", return_value="/bin/arecord")
-        )
-        stack.enter_context(
-            mock.patch.object(commands, "find_speaker", return_value=None)
         )
         stack.enter_context(
             mock.patch.object(
@@ -166,7 +162,7 @@ class VoiceCheckTest(CliCase):
         self.assertIn("speech model: small, 2 MiB", out)
         self.assertIn("consent: present", out)
         self.assertIn("grant: agent 'voice' may use microphone_listen", out)
-        self.assertIn("text to speech: none installed", out)
+        self.assertIn("text to speech: spoken replies are separate", out)
         self.assertTrue(out.rstrip().endswith("ready: yes"))
 
     def test_missing_consent_is_reported(self) -> None:
@@ -196,10 +192,7 @@ class VoiceCheckTest(CliCase):
 
     def test_a_missing_model_and_a_missing_capture_program_are_reported(self) -> None:
         self.allow_everything()
-        with (
-            mock.patch.object(commands.shutil, "which", return_value=None),
-            mock.patch.object(commands, "find_speaker", return_value=None),
-        ):
+        with mock.patch.object(commands.shutil, "which", return_value=None):
             out = self.check(1)
         self.assertIn("arecord NOT found", out)
         self.assertIn("speech model: small MISSING", out)
@@ -399,7 +392,8 @@ class ChatVoiceTest(VoiceCase):
         self.addCleanup(self.session.close, 1)
         self.terminal = FakeTerminal([True])
         self.transcriber.text = "My favourite colour is teal."
-        self.speaker = mock.Mock(spec=EspeakSpeaker)
+        self.speaker = mock.Mock(spec=["say"])
+        self.speaker.say.return_value = None
 
     def run_chat(
         self, lines: list[str], *, speak: bool = False, tool: Any = None, **kw: Any
@@ -585,66 +579,28 @@ class ChatVoiceTest(VoiceCase):
         self.assertEqual(EXTRACTION_DRAIN_SECONDS, 30.0)
         self.assertEqual(extraction_wait_seconds(), 30.0)
 
-    def test_replies_are_spoken_only_with_speak_and_a_local_backend(self) -> None:
+    def test_replies_are_spoken_only_with_speak_after_the_recording(self) -> None:
         with mock.patch.object(self.session, "ask", return_value="Hola"):
             self.run_chat(["", "/quit"], speak=False, speaker=self.speaker)
         self.speaker.say.assert_not_called()
         self.terminal.confirms = [True]
+        open_at_say: list[int] = []
+        self.speaker.say.side_effect = lambda _reply: open_at_say.append(
+            sum(src.opened - src.closed for src in self.sources)
+        )
         with mock.patch.object(self.session, "ask", return_value="Hola"):
-            self.run_chat(["", "/quit"], speak=True, speaker=self.speaker)
-        self.speaker.say.assert_called_once_with("Hola", "en")
-
-    def test_speak_without_a_local_backend_says_so_and_stays_silent(self) -> None:
-        with mock.patch.object(commands, "find_speaker", return_value=None):
-            out = self.run_chat(["/quit"], speak=True)
-        self.assertIn("No local text-to-speech is installed", out)
+            out = self.run_chat(["", "/quit"], speak=True, speaker=self.speaker)
+        self.speaker.say.assert_called_once_with("Hola")  # the reply, nothing else
+        self.assertIn("anyone nearby can hear them", out)
+        self.assertEqual(open_at_say, [0])  # the microphone was closed by then
 
 
 class ChatVoiceCommandTest(CliCase):
-    def test_speak_needs_voice(self) -> None:
-        with (
-            self.assertRaises(SystemExit) as raised,
-            contextlib.redirect_stderr(io.StringIO()),
-        ):
-            main(["chat", "--speak"])
-        self.assertEqual(raised.exception.code, 2)
-
     def test_voice_without_consent_stops_before_loading_a_model(self) -> None:
         with mock.patch("steel.chat.open_session") as opening:
             _out, err = self.run_cli("chat", "--voice", expect=1)
         opening.assert_not_called()
         self.assertIn("no voice consent", err)
-
-
-class SpeakerTest(base.HomeTestCase):
-    def test_the_text_goes_in_on_stdin_and_not_on_the_command_line(self) -> None:
-        run = mock.Mock(return_value=mock.Mock(returncode=0))
-        EspeakSpeaker(run=run).say("secret reply", "es")
-        (argv,), kwargs = run.call_args
-        self.assertEqual(argv, ["espeak-ng", "--stdin", "-v", "es"])
-        self.assertEqual(kwargs["input"], b"secret reply")
-        self.assertNotIn("secret reply", " ".join(argv))
-
-    def test_a_language_that_could_be_an_option_is_dropped(self) -> None:
-        run = mock.Mock(return_value=mock.Mock(returncode=0))
-        EspeakSpeaker(run=run).say("hi", "--stdout")
-        (argv,), _ = run.call_args
-        self.assertEqual(argv, ["espeak-ng", "--stdin"])
-
-    def test_long_replies_are_cut(self) -> None:
-        run = mock.Mock(return_value=mock.Mock(returncode=0))
-        EspeakSpeaker(run=run).say("x" * 5000)
-        self.assertEqual(len(run.call_args.kwargs["input"]), 2000)
-
-    def test_failures_are_false_not_exceptions(self) -> None:
-        self.assertFalse(EspeakSpeaker(run=mock.Mock(side_effect=OSError)).say("hi"))
-        self.assertFalse(
-            EspeakSpeaker(run=mock.Mock(return_value=mock.Mock(returncode=1))).say("hi")
-        )
-
-    def test_no_program_on_the_path_means_no_speaker(self) -> None:
-        self.assertIsNone(find_speaker(which=lambda _name: None))
-        self.assertIsInstance(find_speaker(which=lambda _name: "/bin/x"), EspeakSpeaker)
 
 
 class LiveStateTest(base.HomeTestCase):

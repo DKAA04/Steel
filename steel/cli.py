@@ -12,6 +12,8 @@ steel tool list [--agent ID]      the tools, what each needs, allowed or denied 
 steel tool call NAME --agent ID [--args JSON]   run ONE tool call through the policy (no model)
 steel voice check|consent|revoke|listen   push-to-talk voice input (docs/VOICE.md); check is read-only
 steel chat --voice [--speak]   chat where an empty line means "speak"
+steel chat --speak        replies are also read aloud (local Piper; docs/SPEAK.md)
+steel speak check|say "TEXT"   spoken replies: check is read-only, say speaks one sentence
 steel vision check|consent|revoke   one-snapshot camera (docs/VISION.md); check is read-only
 steel look ["question"] [--save] [--hours N]   ONE picture, described by the local vision model
 steel notes ...           the original expiring-note commands
@@ -263,7 +265,8 @@ def main(argv: list[str] | None = None) -> int:
     chat.add_argument(
         "--speak",
         action="store_true",
-        help="With --voice: speak replies if a local espeak-ng exists.",
+        help="Read replies aloud with the local Piper engine (needs the "
+        "audio:play grant for agent voice; docs/SPEAK.md).",
     )
     mem = sub.add_parser("memory", help="Inspect memory.")
     mem.add_argument("action", choices=["list", "audit"])
@@ -309,6 +312,13 @@ def main(argv: list[str] | None = None) -> int:
         help="check: read-only report; consent / revoke: manage consent; "
         "listen: one push-to-talk capture.",
     )
+    speak = sub.add_parser("speak", help="Spoken replies (local Piper engine).")
+    speak.add_argument(
+        "action",
+        choices=["check", "say"],
+        help="check: read-only report; say: speak one short sentence.",
+    )
+    speak.add_argument("text", nargs="?", help="With say: the sentence (200 max).")
     vision = sub.add_parser("vision", help="One-snapshot camera (local only).")
     vision.add_argument(
         "action",
@@ -371,8 +381,14 @@ def main(argv: list[str] | None = None) -> int:
 
         return vision_check(steel_home())  # read only: no harden(), no camera
 
-    if args.command == "chat" and args.speak and not args.voice:
-        parser.error("--speak needs --voice.")
+    if args.command == "speak" and (args.action == "say") != bool(args.text):
+        parser.error("say needs one TEXT; check takes none.")
+
+    if args.command == "speak" and args.action == "check":
+        from steel.home import steel_home
+        from steel.speak.commands import speak_check
+
+        return speak_check(steel_home())  # read only: plays and starts nothing
 
     if args.command == "wipe" and not args.confirm:
         parser.error("wipe deletes every memory store; add --confirm.")
@@ -450,6 +466,10 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "revoke":
             return voice_commands.voice_revoke(home)
         return voice_commands.voice_listen(home)
+    elif args.command == "speak":
+        from steel.speak.commands import speak_say
+
+        return speak_say(home, args.text)
     elif args.command == "vision":
         from steel.vision import commands as vision_commands
 
@@ -481,8 +501,13 @@ def main(argv: list[str] | None = None) -> int:
         from steel.slash import build_slash
         from steel.voice.terminal import Terminal
 
+        speaker = None
+        if args.speak:
+            from steel.speak.commands import ChatSpeaker
+
+            speaker = ChatSpeaker(home)
         session = open_session(config, home)
-        run_repl(session, build_slash(home, session, Terminal()))
+        run_repl(session, build_slash(home, session, Terminal()), speaker)
     return 0
 
 

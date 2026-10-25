@@ -27,6 +27,7 @@ from steel.tooldata import ToolData
 
 if TYPE_CHECKING:
     from steel.slash import SlashCommands
+    from steel.speak.commands import ChatSpeaker
 
 # Keep at most this many past messages in the prompt (RAM only).
 MAX_HISTORY_MESSAGES = 20
@@ -236,11 +237,16 @@ def open_session(
     )
 
 
-def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
+def run_repl(
+    session: ChatSession,
+    slash: SlashCommands | None = None,
+    speaker: ChatSpeaker | None = None,
+) -> None:
     """Interactive loop. /quit, a bare exit or quit, or Ctrl-D leaves.
 
     Only the line typed here can be a slash command (docs/INJECTION.md rule 3);
-    the model's reply is printed and never parsed.
+    the model's reply is printed and never parsed. With a *speaker* (``--speak``)
+    each reply is also read aloud, and a line typed to stop it is the next one.
     """
     print(
         f"STEEL chat - model {session.model}. The model cannot run tools; you can, "
@@ -250,14 +256,23 @@ def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
         from steel.slash import banner
 
         print(banner(slash))
+    if speaker is not None:
+        from steel.speak.commands import REMINDER
+
+        print(REMINDER)
     if session.service is None:
         print("Automatic memory is OFF ([memory] enabled = false).")
+    pending: str | None = None  # typed while a reply was being spoken
     try:
         while True:
-            try:
-                text = input("you> ").strip()
-            except EOFError:
-                break
+            if pending is not None:
+                text, pending = pending.strip(), None
+                print(f"you> {text}")
+            else:
+                try:
+                    text = input("you> ").strip()
+                except EOFError:
+                    break
             if is_leave_line(text):
                 break
             if not text:
@@ -268,7 +283,10 @@ def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
                 else:
                     slash.handle(text)
                 continue  # a command line never reaches the model
-            print("steel>", session.ask(text))
+            reply = session.ask(text)
+            print("steel>", reply)
+            if speaker is not None:
+                pending = speaker.say(reply)
     except KeyboardInterrupt:
         print()
     finally:

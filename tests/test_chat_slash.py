@@ -549,8 +549,9 @@ class CliWiringTest(base.HomeTestCase):
             mock.patch("steel.chat.run_repl") as repl,
         ):
             self.assertEqual(main(["chat"]), 0)
-        (given_session, slash), _ = repl.call_args
+        (given_session, slash, speaker), _ = repl.call_args
         self.assertIs(given_session, session)
+        self.assertIsNone(speaker)  # nothing is spoken without --speak
         self.assertIsInstance(slash, SlashCommands)
         self.assertIsInstance(slash.keys, Terminal)
         self.assertEqual(
