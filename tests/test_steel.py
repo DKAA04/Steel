@@ -97,6 +97,18 @@ class HomeTestCase(unittest.TestCase):
         pcm = mock.patch("steel.voice.commands.PCM_LIST", self.home.parent / "pcm")
         pcm.start()
         self.addCleanup(pcm.stop)
+        # And for the speech engine: never look at the real ~/.local/share/steel.
+        piper = mock.patch(
+            "steel.speak.synth.default_engine_dir",
+            return_value=self.home.parent / "piper",
+        )
+        piper.start()
+        self.addCleanup(piper.stop)
+        clean = mock.patch.dict(os.environ)
+        clean.start()
+        self.addCleanup(clean.stop)
+        os.environ.pop("STEEL_PIPER_DIR", None)
+        os.environ.pop("STEEL_SPEAK_MAX_CHARS", None)
         # OpenJarvis creates these two files on first run.
         (self.home / "MEMORY.md").write_text("# Agent Memory\n\n")
         (self.home / "USER.md").write_text("# User Profile\n\n")
