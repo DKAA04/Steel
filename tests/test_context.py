@@ -79,11 +79,10 @@ class SameContextEverywhereTest(base.HomeTestCase):
             no_network(),
         ):
             session = self.session(engine)  # type: ignore[arg-type]
-            thread = start_warmup(
+            warm = start_warmup(
                 session.engine, session.model, session.warmup_messages()
             )
-            assert thread is not None
-            thread.join(5)
+            warm.join(5)
             session.ask("hello there")
             session.close(5)  # waits for the extraction request
             # The vision call builds its own engine, like `steel look` does.
@@ -202,13 +201,12 @@ class WarmPrefixTest(base.HomeTestCase):
 
     def warm_then_ask(self) -> tuple[dict[str, Any], dict[str, Any]]:
         with no_network():
-            thread = start_warmup(
+            warm = start_warmup(
                 self.session_.engine,
                 self.session_.model,
                 self.session_.warmup_messages(),
             )
-            assert thread is not None
-            thread.join(5)
+            warm.join(5)
             self.session_.ask("hello there")
         warm, chat = self.ollama.bodies[0], self.ollama.bodies[1]
         return warm, chat
@@ -225,6 +223,38 @@ class WarmPrefixTest(base.HomeTestCase):
         self.assertIn("Dentist visit", system)  # and so are the live notes
         self.assertEqual(warm["options"]["num_predict"], 1)
         self.assertEqual(warm["options"]["num_ctx"], chat["options"]["num_ctx"])
+
+    def test_the_two_requests_differ_only_in_the_last_message_and_the_token_limit(
+        self,
+    ) -> None:
+        """Everything Ollama sees apart from those two is identical (docs/LATENCY.md
+        section 10): model, stream, think, keep-alive, temperature, num_ctx, and
+        no seed, format or tools on either."""
+        os.environ[KEEP_ALIVE_ENV] = "30m"
+        self.addCleanup(os.environ.pop, KEEP_ALIVE_ENV, None)
+        session = self.session(self.ollama.engine())  # type: ignore[arg-type]
+        self.addCleanup(session.close, 5)
+        with no_network():
+            start_warmup(session.engine, session.model, session.warmup_messages()).join(
+                5
+            )
+            session.ask("hello there")
+        warm, chat = self.ollama.bodies[-2], self.ollama.bodies[-1]
+        self.assertEqual(warm["messages"][-1]["content"], WARMUP_TEXT)
+        self.assertEqual(chat["messages"][-1]["content"], "hello there")
+        self.assertEqual(warm["options"]["num_predict"], 1)
+        self.assertEqual(chat["options"]["num_predict"], 1024)
+        for body in (warm, chat):
+            body["messages"] = body["messages"][:-1]
+            del body["options"]["num_predict"]
+        self.assertEqual(warm, chat)
+        self.assertEqual(
+            sorted(warm),
+            ["keep_alive", "messages", "model", "options", "path", "stream", "think"],
+        )
+        self.assertEqual(sorted(warm["options"]), ["num_ctx", "temperature"])
+        self.assertIs(warm["stream"], False)
+        self.assertIs(warm["think"], False)
 
     def test_the_warm_up_ends_in_the_fixed_word_and_holds_no_message_of_the_owner(
         self,
@@ -262,19 +292,19 @@ class WarmPrefixTest(base.HomeTestCase):
         self.ollama.gate.clear()  # Ollama never answers
         self.addCleanup(self.ollama.gate.set)
         with no_network():
-            thread = start_warmup(
+            warm = start_warmup(
                 self.session_.engine,
                 self.session_.model,
                 self.session_.warmup_messages(),
             )
-        assert thread is not None
-        self.assertTrue(thread.daemon)  # the process can end while it waits
-        self.assertTrue(thread.is_alive())
+        assert warm.thread is not None
+        self.assertTrue(warm.thread.daemon)  # the process can end while it waits
+        self.assertTrue(warm.thread.is_alive())
+        self.assertEqual(warm.status, "running")
 
     def test_a_remote_engine_gets_no_warm_up_with_memory_in_it(self) -> None:
         engine = self.ollama.engine("http://192.0.2.10:11434")
         with no_network():
-            self.assertIsNone(
-                start_warmup(engine, "m", self.session_.warmup_messages())
-            )
+            warm = start_warmup(engine, "m", self.session_.warmup_messages())
+            self.assertEqual((warm.status, warm.reason), ("skipped", "not-local"))
         self.assertEqual(self.ollama.bodies, [])

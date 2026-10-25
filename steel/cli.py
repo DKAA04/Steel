@@ -263,7 +263,9 @@ def _open_chat(config: Any, home: Path) -> ChatSession:
             print(f"steel: {problem}", file=sys.stderr)
     session = open_session(config, home)
     # Built here, in the main thread: it reads the memory files.
-    start_warmup(session.engine, session.model, session.warmup_messages())  # no wait
+    session.warmup = start_warmup(
+        session.engine, session.model, session.warmup_messages()
+    )  # never waits
     return session
 
 

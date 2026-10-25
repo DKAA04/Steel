@@ -81,8 +81,8 @@ class TimingLineTest(base.HomeTestCase):
         self.assertEqual(
             timing_line(timing, SpeechTiming(first_audio=0.4, played=4.7)),
             "timings: model 5.8 s | first token 1.5 s (load 0.0 s, prompt 1.5 s) | "
-            "generation 4.0 s | 10.0 tokens/s | first audio 0.4 s after the reply | "
-            "played 4.7 s",
+            "generation 4.0 s | 10.0 tokens/s | prompt tokens n/a | "
+            "first audio 0.4 s after the reply | played 4.7 s",
         )
 
     def test_missing_or_odd_engine_numbers_show_as_not_available(self) -> None:
@@ -97,7 +97,7 @@ class TimingLineTest(base.HomeTestCase):
             self.assertEqual(
                 timing_line(timing),
                 "timings: model 2.0 s | first token n/a (load n/a, prompt n/a) | "
-                "generation n/a | n/a tokens/s",
+                "generation n/a | n/a tokens/s | prompt tokens n/a",
             )
 
 
@@ -134,7 +134,7 @@ class ChatTimingsTest(SpeakCase):
         self.assertEqual(
             line,
             "timings: model 5.8 s | first token 1.5 s (load 0.0 s, prompt 1.5 s) | "
-            "generation 4.0 s | 10.0 tokens/s",
+            "generation 4.0 s | 10.0 tokens/s | prompt tokens n/a",
         )
 
     def test_the_timing_line_never_contains_the_message_or_the_reply(self) -> None:
@@ -255,9 +255,7 @@ class WarmUpTest(base.HomeTestCase):
         session = self.session(self.ollama.engine())  # type: ignore[arg-type]
         self.addCleanup(session.close, 5)
         with no_network():
-            thread = start_warmup(session.engine, session.model)
-            assert thread is not None
-            thread.join(5)
+            start_warmup(session.engine, session.model).join(5)
         (body,) = self.ollama.bodies
         self.assertEqual(body["path"], "/api/chat")
         self.assertEqual(body["messages"], [{"role": "user", "content": WARMUP_TEXT}])
@@ -294,7 +292,7 @@ class WarmUpTest(base.HomeTestCase):
             base.FakeEngine(),
         ):
             with no_network():
-                self.assertIsNone(start_warmup(engine, "fake"))
+                self.assertEqual(start_warmup(engine, "fake").status, "skipped")
                 self.assertFalse(install_request_settings(engine, "30m", 4096))
         self.assertEqual(self.ollama.bodies, [])
 
@@ -306,9 +304,9 @@ class WarmUpTest(base.HomeTestCase):
         )
         err = io.StringIO()
         with contextlib.redirect_stderr(err), no_network():
-            thread = start_warmup(engine, "fake")
-            assert thread is not None
-            thread.join(5)
+            warm = start_warmup(engine, "fake")
+            warm.join(5)
+        self.assertEqual((warm.status, warm.reason), ("failed", "http-500"))
         self.assertEqual(err.getvalue(), "")
 
 

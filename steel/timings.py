@@ -22,6 +22,13 @@ class ModelTiming:
     prompt: float | None = None  # Ollama: reading the prompt
     generate: float | None = None  # Ollama: writing the reply
     tokens: int | None = None  # tokens in the reply
+    # Ollama's prompt_eval_count: tokens it really processed (fewer when it
+    # reused a cached prefix), and the full prompt size (OpenJarvis: the larger
+    # of Ollama's count and its own estimate, so approximate).
+    prompt_evaluated: int | None = None
+    prompt_total: int | None = None
+    # Seconds this request waited for the start-up warm-up (None: it did not).
+    queued: float | None = None
 
     @property
     def first_token(self) -> float | None:
@@ -54,6 +61,11 @@ def _seconds(timing: dict[str, Any], key: str) -> float | None:
     return None
 
 
+def _count(value: Any) -> int | None:
+    ok = isinstance(value, int) and not isinstance(value, bool) and value >= 0
+    return value if ok else None
+
+
 def model_timing(result: Any, total: float) -> ModelTiming:
     """Read Ollama's durations (nanoseconds) from an engine result, if any."""
     if not isinstance(result, dict):
@@ -67,7 +79,13 @@ def model_timing(result: Any, total: float) -> ModelTiming:
         load=_seconds(timing, "load_duration"),
         prompt=_seconds(timing, "prompt_eval_duration"),
         generate=_seconds(timing, "eval_duration"),
-        tokens=tokens if isinstance(tokens, int) and tokens >= 0 else None,
+        tokens=_count(tokens),
+        prompt_evaluated=_count(
+            usage.get("prompt_tokens_evaluated") if isinstance(usage, dict) else None
+        ),
+        prompt_total=_count(
+            usage.get("prompt_tokens") if isinstance(usage, dict) else None
+        ),
     )
 
 
@@ -85,6 +103,16 @@ def timing_line(model: ModelTiming, speech: SpeechTiming | None = None) -> str:
         f"generation {_s(model.generate)}",
         "n/a tokens/s" if rate is None else f"{rate:.1f} tokens/s",
     ]
+    if model.prompt_evaluated is None or model.prompt_total is None:
+        parts.append("prompt tokens n/a")
+    else:
+        # Ollama does not say how many tokens it reused, so that stays n/a.
+        parts.append(
+            f"prompt tokens {model.prompt_evaluated} evaluated of ~{model.prompt_total}"
+            " (reused n/a)"
+        )
+    if model.queued is not None:
+        parts.append(f"queued behind warm-up {_s(model.queued)}")
     if speech is not None:
         parts.append(f"first audio {_s(speech.first_audio)} after the reply")
         parts.append(f"played {_s(speech.played)}")

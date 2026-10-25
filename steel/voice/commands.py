@@ -19,7 +19,14 @@ from typing import Any
 
 from openjarvis.core.types import ToolCall
 
-from steel.chat import LEAVE_HINT, ChatSession, finish, is_leave_line, print_timings
+from steel.chat import (
+    LEAVE_HINT,
+    ChatSession,
+    finish,
+    is_leave_line,
+    print_timings,
+    report_warmup,
+)
 from steel.home import MODELS_DIR, POLICY_FILE
 from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
@@ -321,6 +328,8 @@ def run_voice_repl(
                     continue
             if speaker is not None:
                 speaker.prepare(text)  # the voice loads while the model writes
+            if timings:
+                report_warmup(session)
             reply = session.ask(text)
             print("steel>", reply)
             if speaker is not None:

@@ -14,7 +14,7 @@ import os
 import threading
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -28,7 +28,7 @@ from steel.extractor import SteelFactExtractor
 from steel.memory import SteelMemory
 from steel.timings import ModelTiming, model_timing
 from steel.tooldata import ToolData
-from steel.warm import DEFAULT_NUM_CTX, WARMUP_TEXT
+from steel.warm import DEFAULT_NUM_CTX, WARMUP_TEXT, WarmUp
 
 if TYPE_CHECKING:
     from steel.slash import SlashCommands
@@ -115,6 +115,10 @@ class ChatSession:
     clock: Callable[[], float] = time.monotonic
     # The context window every request asks for (docs/LATENCY.md section 9).
     num_ctx: int = DEFAULT_NUM_CTX
+    # The start-up warm-up, if one was started (``steel chat``); and where a
+    # one-line notice goes (docs/LATENCY.md section 10).
+    warmup: WarmUp | None = None
+    notice: Callable[[str], None] = print
 
     def _system_prompt(self) -> str:
         """Base prompt plus the user-authored MEMORY.md / USER.md entries."""
@@ -164,8 +168,19 @@ class ChatSession:
         """Send one user message and return the reply."""
         messages = self.build_messages(user_text)
         started = self.clock()
+        warm = self.warmup
+        waiting = warm is not None and warm.running
+        if waiting:
+            # Ollama answers one request at a time, so this one queues behind
+            # the warm-up. Say so, instead of looking frozen.
+            self.notice("waiting for the warm-up to finish")
         result = self.engine.generate(messages, model=self.model)
-        self.last_timing = model_timing(result, self.clock() - started)
+        ended = self.clock()
+        self.last_timing = model_timing(result, ended - started)
+        if waiting and warm is not None:
+            finished = warm.finished_at if warm.finished_at is not None else ended
+            queued = max(0.0, min(finished, ended) - started)
+            self.last_timing = replace(self.last_timing, queued=queued)
         reply = str(result.get("content", "") if isinstance(result, dict) else result)
         # Remember the turn in RAM for the rest of this session only.
         self.history.append(Message(role=Role.USER, content=user_text))
@@ -322,6 +337,8 @@ def run_repl(
                 continue  # a command line never reaches the model
             if speaker is not None:
                 speaker.prepare(text)  # the voice loads while the model writes
+            if timings:
+                report_warmup(session)
             reply = session.ask(text)
             print("steel>", reply)
             if speaker is not None:
@@ -336,6 +353,18 @@ def run_repl(
         finish(session)
 
 
+def report_warmup(session: ChatSession) -> None:
+    """``--timings``: say once how the warm-up went, as soon as it is over.
+
+    Called only between turns (before a message is sent, after a reply), never
+    from the warm-up's own thread, so it cannot land on a half-typed prompt line.
+    """
+    warm = session.warmup
+    if warm is not None and not warm.reported and not warm.running:
+        warm.reported = True
+        print(warm.line())
+
+
 def print_timings(session: ChatSession, speaker: ChatSpeaker | None) -> None:
     """``--timings``: the stage times of the turn just done, numbers only."""
     if session.last_timing is None:
@@ -343,6 +372,7 @@ def print_timings(session: ChatSession, speaker: ChatSpeaker | None) -> None:
     from steel.timings import timing_line
 
     speech = speaker.last_timing if speaker is not None else None
+    report_warmup(session)
     print(timing_line(session.last_timing, speech))
 
 

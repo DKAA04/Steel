@@ -27,7 +27,9 @@ import logging
 import os
 import re
 import threading
-from collections.abc import Mapping
+import time
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
@@ -170,27 +172,99 @@ def install_request_settings(
     return True
 
 
-def _warm(engine: Any, model: str, messages: list[Message]) -> None:
+@dataclass
+class WarmUp:
+    """The start-up warm-up and how it went. Codes only, never any text."""
+
+    status: str = "running"  # running, done, failed or skipped
+    reason: str = ""  # a code such as "timeout" or "not-local"
+    seconds: float | None = None  # how long it took (done or failed)
+    finished_at: float | None = None  # clock() when it ended
+    reported: bool = False  # its line was printed
+    thread: threading.Thread | None = field(default=None, repr=False)
+
+    @property
+    def running(self) -> bool:
+        return self.status == "running"
+
+    def join(self, timeout: float | None = None) -> None:
+        if self.thread is not None:
+            self.thread.join(timeout)
+
+    def line(self) -> str:
+        """The ``--timings`` line about the warm-up."""
+        if self.status == "done":
+            return f"warm-up: done in {self.seconds or 0.0:.1f} s"
+        if self.status == "failed":
+            return f"warm-up: failed ({self.reason})"
+        if self.status == "skipped":
+            return f"warm-up: skipped ({self.reason})"
+        return "warm-up: still running"
+
+
+def failure_code(exc: BaseException) -> str:
+    """A short code for why a request failed. Never the message, which may hold
+    text from the server."""
+    cause = exc.__cause__
+    if isinstance(exc, httpx.TimeoutException) or isinstance(
+        cause, httpx.TimeoutException
+    ):
+        return "timeout"
+    if isinstance(exc, (httpx.TransportError, ConnectionError)) or isinstance(
+        cause, httpx.TransportError
+    ):
+        return "connection"
+    match = re.match(r"Ollama returned ([0-9]{3})\b", str(exc))
+    if match:
+        return f"http-{match[1]}"
+    return "error"
+
+
+def _warm(
+    engine: Any,
+    model: str,
+    messages: list[Message],
+    warm: WarmUp,
+    clock: Callable[[], float],
+) -> None:
+    started = clock()
     try:
         engine.generate(messages, model=model, max_tokens=1)
+        warm.status = "done"
     except Exception as exc:  # noqa: BLE001 - a failed warm-up only costs time
-        _log.debug("warm-up failed: %s", type(exc).__name__)
+        warm.status, warm.reason = "failed", failure_code(exc)
+        _log.debug("warm-up failed: %s", warm.reason)
+    finally:
+        warm.finished_at = clock()
+        warm.seconds = warm.finished_at - started
+        if warm.status == "running":  # BaseException: do not stay "running"
+            warm.status, warm.reason = "failed", "error"
 
 
 def start_warmup(
-    engine: Any, model: str, messages: list[Message] | None = None
-) -> threading.Thread | None:
-    """Load the model in the background; never waits. None if not local Ollama.
+    engine: Any,
+    model: str,
+    messages: list[Message] | None = None,
+    *,
+    clock: Callable[[], float] = time.monotonic,
+) -> WarmUp:
+    """Load the model in the background; never waits. A warm-up that was not
+    started has status ``skipped`` and the reason ``not-local``.
 
     *messages* is the first turn's prompt without the owner's message, ending in
     the fixed word. The default is that word alone.
     """
+    warm = WarmUp()
     if local_ollama(engine) is None:
-        return None
+        warm.status, warm.reason = "skipped", "not-local"
+        return warm
     if messages is None:
         messages = [Message(role=Role.USER, content=WARMUP_TEXT)]
-    thread = threading.Thread(
-        target=_warm, args=(engine, model, messages), name="steel-warmup", daemon=True
+    warm.thread = threading.Thread(
+        target=_warm,
+        args=(engine, model, messages, warm, clock),
+        name="steel-warmup",
+        daemon=True,
     )
-    thread.start()
-    return thread
+    warm.thread.start()
+    return warm
