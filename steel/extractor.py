@@ -7,7 +7,8 @@ well") and the answer would be stored as a fact. This subclass therefore:
 1. never sends assistant text, whatever the caller passes;
 2. uses a stricter prompt that says the message is data, not a request;
 3. drops results that are plainly not facts about the user (first/second
-   person answers, "the user asked ...") with a small deterministic filter.
+   person answers, "the user asked ...") with a small deterministic filter;
+4. skips any text that holds a wrapped tool result (docs/INJECTION.md rule 2).
 
 Uses only the public ``FactExtractor.extract`` and its ``system_prompt``
 argument; no private members.
@@ -19,6 +20,8 @@ import re
 from typing import Any
 
 from openjarvis.memory.extractor import FactExtractor
+
+from steel.tooldata import is_tool_data
 
 SYSTEM_PROMPT = (
     "You read ONE message written by a user and list the durable facts the "
@@ -70,5 +73,11 @@ class SteelFactExtractor(FactExtractor):
         super().__init__(engine, model, **kwargs)
 
     def extract(self, user_text: str, assistant_text: str = "") -> list[str]:
-        """Facts from *user_text*; *assistant_text* is ignored on purpose."""
+        """Facts from *user_text*; *assistant_text* is ignored on purpose.
+
+        A wrapped tool result is never extracted, not even when it is pasted
+        into a message (docs/INJECTION.md rule 2): the model is not called.
+        """
+        if is_tool_data(user_text):
+            return []
         return [f for f in super().extract(user_text, "") if keep_fact(f)]
