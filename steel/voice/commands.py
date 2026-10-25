@@ -19,7 +19,7 @@ from typing import Any
 
 from openjarvis.core.types import ToolCall
 
-from steel.chat import ChatSession, finish
+from steel.chat import LEAVE_HINT, ChatSession, finish, is_leave_line
 from steel.home import MODELS_DIR, POLICY_FILE
 from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
@@ -282,7 +282,8 @@ def run_voice_repl(
                 "No local text-to-speech is installed (espeak-ng); replies stay silent."
             )
     print(f"STEEL chat (voice) - model {session.model}. The model cannot run tools.")
-    print("Press Enter on an empty line to speak, or type a message. /quit leaves.")
+    print("Press Enter on an empty line to speak, or type a message.")
+    print(LEAVE_HINT)
     print(banner(slash))
     if session.service is None:
         print("Automatic memory is OFF ([memory] enabled = false).")
@@ -292,7 +293,7 @@ def run_voice_repl(
                 line = input("you> ").strip()
             except EOFError:
                 break
-            if line in ("/quit", "/exit"):
+            if is_leave_line(line):  # the typed line only, never a transcript
                 break
             if line.startswith("/"):
                 slash.handle(line)  # typed by the owner; never a transcript

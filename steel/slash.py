@@ -75,7 +75,7 @@ HELP = "\n".join(
             for name, c in COMMANDS.items()
         ),
         f"  {'/help':<18} this list",
-        f"  {'/quit':<18} leave",
+        f"  {'/quit':<18} leave (so do a bare exit or quit, and Ctrl-D)",
         (
             "Each one runs through the permission policy as agent 'chat'; you "
             "write its grants by hand (docs/INJECTION.md)."

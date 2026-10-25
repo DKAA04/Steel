@@ -23,6 +23,7 @@ import test_steel as base
 from test_voice_tool import LOG, SECRET, VoiceCase, voice_grant
 from voice_helpers import FakeSource, tone
 
+from steel.chat import LEAVE_HINT
 from steel.cli import main
 from steel.memory import SteelMemory
 from steel.security import PolicyError, policy_or_deny_all
@@ -423,6 +424,17 @@ class ChatVoiceTest(VoiceCase):
     def stored_facts(self) -> list[str]:
         self.session.close()  # waits for the extraction to finish
         return [e.text for e in SteelMemory(self.home).entries()]
+
+    def test_a_typed_exit_leaves_but_a_transcript_saying_quit_is_sent(
+        self,
+    ) -> None:
+        out = self.run_chat(["Exit"])  # typed: leaves; nothing else is read
+        self.assertIn(LEAVE_HINT, out)
+        self.assertEqual(self.engine.chat_prompts, [])
+        self.transcriber.text = "quit"  # spoken: just text, never a command
+        self.terminal = FakeTerminal([True])
+        self.run_chat(["", "/quit"])
+        self.assertEqual(len(self.engine.chat_prompts), 1)
 
     def test_the_transcript_is_shown_before_it_is_used_and_enter_sends_it(
         self,

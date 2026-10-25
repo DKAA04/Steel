@@ -72,6 +72,18 @@ BASE_PROMPT = (
 )
 
 
+# A bare word on its own line leaves too: people type "exit" by habit. Only an
+# exact, typed match counts; a transcript is never checked (it is not a command).
+_LEAVE_COMMANDS = frozenset({"/quit", "/exit"})
+_LEAVE_WORDS = frozenset({"exit", "quit"})
+LEAVE_HINT = "To leave: type /quit, type exit or quit, or press Ctrl-D."
+
+
+def is_leave_line(line: str) -> bool:
+    """Whether a TYPED, stripped line asks to leave the chat."""
+    return line in _LEAVE_COMMANDS or line.lower() in _LEAVE_WORDS
+
+
 def _build_scanner() -> Any:
     """OpenJarvis' prompt-injection scanner, or None if it cannot load."""
     try:
@@ -225,14 +237,14 @@ def open_session(
 
 
 def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
-    """Interactive loop. Type /quit (or Ctrl-D) to leave.
+    """Interactive loop. /quit, a bare exit or quit, or Ctrl-D leaves.
 
     Only the line typed here can be a slash command (docs/INJECTION.md rule 3);
     the model's reply is printed and never parsed.
     """
     print(
         f"STEEL chat - model {session.model}. The model cannot run tools; you can, "
-        "with slash commands. Type /quit to exit."
+        f"with slash commands. {LEAVE_HINT}"
     )
     if slash is not None:
         from steel.slash import banner
@@ -246,7 +258,7 @@ def run_repl(session: ChatSession, slash: SlashCommands | None = None) -> None:
                 text = input("you> ").strip()
             except EOFError:
                 break
-            if text in ("/quit", "/exit"):
+            if is_leave_line(text):
                 break
             if not text:
                 continue
