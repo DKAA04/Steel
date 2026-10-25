@@ -314,9 +314,11 @@ class EarlyStartTest(unittest.TestCase):
         self.assertEqual(crashed.stdin.data, b"")
         self.assertEqual(self.popen.processes[1].stdin.data, b"Hello.\n")
         # And a crash while waiting is also noticed by the next prepare.
-        self.popen.processes[1].poll.return_value = 1
         engine.prepare(self.en)
-        self.assertEqual(len(self.popen.processes), 3)
+        self.popen.processes[2].poll.return_value = 1
+        engine.prepare(self.en)
+        self.assertEqual(len(self.popen.processes), 4)
+        self.popen.processes[2].wait.assert_called()  # the dead one is reaped
 
     def test_an_engine_that_dies_as_the_text_arrives_is_replaced_once(self) -> None:
         engine = self.engine()
