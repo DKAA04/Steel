@@ -168,6 +168,7 @@ class Speak(BaseTool):
             return self._failed("Not spoken: the speech engine produced no sound.")
         died = bool(getattr(run, "died", False))
         engine_seconds = getattr(run, "engine_seconds", None)
+        engine_state = getattr(run, "engine_state", None)
         words = {
             "finished": "Spoken",
             "key": "Stopped",
@@ -188,6 +189,9 @@ class Speak(BaseTool):
                 "stopped_by": "engine" if died else done.reason,
                 "cut": speech.cut,
                 # For --timings: a number only, never the text.
+                "engine_state": (
+                    engine_state if engine_state in ("warm", "loading") else None
+                ),
                 "engine_seconds": (
                     round(engine_seconds, 3)
                     if isinstance(engine_seconds, (int, float))

@@ -166,6 +166,8 @@ def get_speak_tool(
             engine_dir(),
             idle_end=config.idle_end_seconds,
             persistent=config.persistent,
+            keep_voices=config.keep_voices,
+            voice_idle_seconds=config.voice_idle_minutes * 60.0,
         ),
         open_sink=open_sink or AplaySink,
         indicator=indicator or SpeakingIndicator(),

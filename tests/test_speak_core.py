@@ -313,14 +313,14 @@ class EarlyStartTest(unittest.TestCase):
         engine.prepare(self.en)
         self.assertEqual(len(self.popen.processes), 1)
 
-    def test_a_waiting_engine_for_another_voice_is_stopped_for_a_fresh_one(
+    def test_a_waiting_engine_for_another_voice_stays_and_a_second_one_starts(
         self,
     ) -> None:
         engine = self.engine()
         engine.prepare(self.en)
         engine.start("Hola.", self.es)
         english, spanish = self.popen.processes
-        english.kill.assert_called_once_with()
+        english.kill.assert_not_called()  # up to two voices stay loaded
         self.assertEqual(english.stdin.data, b"")  # never got the text
         self.assertEqual(spanish.stdin.data, b"Hola.\n")
         self.assertIn(str(self.es), self.popen.calls[1]["argv"])

@@ -42,6 +42,9 @@ class SpeechTiming:
     played: float  # seconds of audio played
     # Text handed to the engine -> its first audio; None for a one-reply process.
     engine: float | None = None
+    # "warm": the engine was running with its voice loaded when the text arrived;
+    # "loading": it was started or restarted for this reply (or just before it).
+    engine_state: str | None = None
 
 
 def _seconds(timing: dict[str, Any], key: str) -> float | None:
@@ -68,11 +71,6 @@ def model_timing(result: Any, total: float) -> ModelTiming:
     )
 
 
-# First audio this soon after the text means the voice was already loaded
-# (measured 0.1 to 0.45 s); loading it takes about 4 s or more.
-WARM_ENGINE_SECONDS = 1.0
-
-
 def _s(value: float | None) -> str:
     return "n/a" if value is None else f"{value:.1f} s"
 
@@ -90,7 +88,6 @@ def timing_line(model: ModelTiming, speech: SpeechTiming | None = None) -> str:
     if speech is not None:
         parts.append(f"first audio {_s(speech.first_audio)} after the reply")
         parts.append(f"played {_s(speech.played)}")
-        if speech.engine is not None:
-            state = "warm" if speech.engine <= WARM_ENGINE_SECONDS else "loading"
-            parts.append(f"engine: {state} ({_s(speech.engine)})")
+        if speech.engine is not None and speech.engine_state is not None:
+            parts.append(f"engine: {speech.engine_state} ({_s(speech.engine)})")
     return " | ".join(parts)

@@ -20,7 +20,7 @@ from openjarvis.core.types import ToolCall
 from steel.home import POLICY_FILE
 from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
-from steel.speak.config import SAY_MAX_CHARS, speak_config
+from steel.speak.config import SAY_MAX_CHARS, speak_config, speak_config_problems
 from steel.speak.keys import TypedLineStop
 from steel.speak.language import pick_language
 from steel.speak.synth import PIPER_VERSION, engine_dir, engine_python, engine_version
@@ -67,6 +67,8 @@ class ChatSpeaker:
     """Speaks each reply of one chat session. Silent for good after a denial."""
 
     def __init__(self, home: Path, *, tool: Any = None, keys: Any = None) -> None:
+        for problem in speak_config_problems():
+            print(f"steel: {problem}", file=sys.stderr)
         self.keys = keys or TypedLineStop()
         self.tool = tool or get_speak_tool(home, keys=self.keys)
         policy = _policy(home)
@@ -108,6 +110,7 @@ class ChatSpeaker:
                 first_audio=first if isinstance(first, (int, float)) else None,
                 played=float(result.metadata.get("seconds", 0.0)),
                 engine=_number(result.metadata.get("engine_seconds")),
+                engine_state=_state(result.metadata.get("engine_state")),
             )
             if result.metadata.get("stopped_by") == "engine":
                 print(f"({result.content})")
@@ -127,6 +130,10 @@ class ChatSpeaker:
 def _number(value: object) -> float | None:
     ok = isinstance(value, (int, float)) and not isinstance(value, bool)
     return float(value) if ok else None  # type: ignore[arg-type]
+
+
+def _state(value: object) -> str | None:
+    return value if value in ("warm", "loading") else None
 
 
 def _grant_line(home: Path) -> tuple[bool, str]:
@@ -198,9 +205,12 @@ def speak_check(
     print(f"spoken length: at most {config.max_chars} characters per reply")
     if config.persistent:
         print(
-            "engine lifetime: one engine per voice stays loaded while `steel chat "
-            "--speak` is open (about 142 MiB of RAM each, one voice at a time); a "
-            f"reply ends after {config.idle_end_seconds:g} s without new audio"
+            "engine lifetime: the engines of the last "
+            f"{config.keep_voices} voice(s) used stay loaded while `steel chat "
+            "--speak` is open (about 142 MiB of RAM each, so up to "
+            f"{142 * config.keep_voices} MiB), and one unused for "
+            f"{config.voice_idle_minutes} minutes is stopped; a reply ends after "
+            f"{config.idle_end_seconds:g} s without new audio"
         )
     else:
         print(

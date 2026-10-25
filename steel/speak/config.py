@@ -13,6 +13,10 @@ IDLE_END_ENV = "STEEL_SPEAK_IDLE_END_SECONDS"
 MIN_IDLE_END, MAX_IDLE_END = 0.5, 5.0
 DEFAULT_IDLE_END = 1.5
 PERSISTENT_ENV = "STEEL_SPEAK_PERSISTENT"
+KEEP_VOICES_ENV = "STEEL_SPEAK_KEEP_VOICES"
+MIN_KEEP_VOICES, MAX_KEEP_VOICES, DEFAULT_KEEP_VOICES = 1, 3, 2
+VOICE_IDLE_ENV = "STEEL_SPEAK_VOICE_IDLE_MINUTES"
+MIN_VOICE_IDLE, MAX_VOICE_IDLE, DEFAULT_VOICE_IDLE = 5, 240, 30
 # A hard stop for one reply, whatever the text: a stuck engine must not talk on.
 MAX_AUDIO_SECONDS = 120.0
 # ``steel speak say`` is a test of one short sentence.
@@ -27,6 +31,10 @@ class SpeakConfig:
     idle_end_seconds: float = DEFAULT_IDLE_END
     # False ($STEEL_SPEAK_PERSISTENT=0): one engine process per reply, as in 5a.
     persistent: bool = True
+    # Voices whose engines stay running (the most recently used), and the minutes
+    # after which an unused one is stopped.
+    keep_voices: int = DEFAULT_KEEP_VOICES
+    voice_idle_minutes: int = DEFAULT_VOICE_IDLE
 
 
 def speak_config(env: Mapping[str, str] | None = None) -> SpeakConfig:
@@ -45,7 +53,42 @@ def speak_config(env: Mapping[str, str] | None = None) -> SpeakConfig:
         max_chars=max_chars,
         idle_end_seconds=_idle_end(env.get(IDLE_END_ENV, "")),
         persistent=env.get(PERSISTENT_ENV, "").strip() != "0",
+        keep_voices=_whole(
+            env.get(KEEP_VOICES_ENV, ""),
+            MIN_KEEP_VOICES,
+            MAX_KEEP_VOICES,
+            DEFAULT_KEEP_VOICES,
+        ),
+        voice_idle_minutes=_whole(
+            env.get(VOICE_IDLE_ENV, ""),
+            MIN_VOICE_IDLE,
+            MAX_VOICE_IDLE,
+            DEFAULT_VOICE_IDLE,
+        ),
     )
+
+
+def _whole(raw: str, low: int, high: int, default: int) -> int:
+    raw = raw.strip()
+    return int(raw) if raw.isdigit() and low <= int(raw) <= high else default
+
+
+def speak_config_problems(env: Mapping[str, str] | None = None) -> list[str]:
+    """One line for each speaking setting that is set but not usable (the
+    default is used instead). Shown on stderr when ``--speak`` starts."""
+    env = os.environ if env is None else env
+    problems = []
+    for name, low, high, default in (
+        (KEEP_VOICES_ENV, MIN_KEEP_VOICES, MAX_KEEP_VOICES, DEFAULT_KEEP_VOICES),
+        (VOICE_IDLE_ENV, MIN_VOICE_IDLE, MAX_VOICE_IDLE, DEFAULT_VOICE_IDLE),
+    ):
+        raw = env.get(name, "").strip()
+        if raw and _whole(raw, low, high, -1) == -1:
+            problems.append(
+                f"{name}={raw!r} is not a whole number from {low} to {high}; "
+                f"{default} is used."
+            )
+    return problems
 
 
 def _idle_end(raw: str) -> float:

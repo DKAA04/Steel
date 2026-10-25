@@ -105,7 +105,11 @@ def main(
     home = home or steel_home()  # read only: voices
     config = speak_config()
     engine = engine or PiperEngine(
-        engine_dir(), idle_end=config.idle_end_seconds, persistent=config.persistent
+        engine_dir(),
+        idle_end=config.idle_end_seconds,
+        persistent=config.persistent,
+        keep_voices=config.keep_voices,
+        voice_idle_seconds=config.voice_idle_minutes * 60.0,
     )
     scratch = Path(tempfile.mkdtemp(prefix="steel-speak-check-"))
     try:

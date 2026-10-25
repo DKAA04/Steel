@@ -32,8 +32,11 @@ from steel.speak.commands import ChatSpeaker
 from steel.speak.config import (
     DEFAULT_IDLE_END,
     IDLE_END_ENV,
+    KEEP_VOICES_ENV,
     PERSISTENT_ENV,
+    VOICE_IDLE_ENV,
     speak_config,
+    speak_config_problems,
 )
 from steel.speak.player import RATES
 from steel.speak.synth import (
@@ -89,13 +92,15 @@ class PersistentEngineTest(unittest.TestCase):
             which=self.tools.get,
             idle_end=1.5,
             clock=self.clock,
+            background_reaper=False,
         )
         self.addCleanup(self.engine.close)
 
     def say(self, text: str = "Hello there.", model: Path | None = None) -> Any:
         """Start a reply and let the engine answer with three chunks."""
         run = self.engine.start(text, model or self.en)
-        self.popen.audio[len(self.popen.processes) - 1].write(CHUNK * 3)
+        index = self.popen.processes.index(run._engine.process)
+        self.popen.audio[index].write(CHUNK * 3)
         return run
 
     def finish(self, run: Any, silence: float = 1.6) -> bytes:
@@ -224,20 +229,131 @@ class PersistentEngineTest(unittest.TestCase):
         self.assertEqual(drain(run), (b"", True))
         self.assertTrue(run.died)
 
-    def test_a_language_switch_stops_the_other_voice_and_starts_this_one(self) -> None:
+    def test_english_spanish_english_is_warm_on_the_third_reply(self) -> None:
+        states = []
+        for text, model in (("Hello.", self.en), ("Hola.", self.es), ("Hi.", self.en)):
+            run = self.say(text, model)
+            states.append(run.engine_state)
+            self.finish(run)
+            run.stop()
+            self.clock.now += 10
+        self.assertEqual(states, ["loading", "loading", "warm"])
+        english, spanish = self.popen.processes
+        self.assertEqual(len(self.popen.processes), 2)  # no third process
+        english.kill.assert_not_called()
+        spanish.kill.assert_not_called()
+        self.assertEqual(english.stdin.data, b"Hello.\nHi.\n")
+        self.assertEqual(self.engine.voices_running, [self.es, self.en])
+
+    def test_a_third_voice_stops_the_least_recently_used_one(self) -> None:
+        it = Path("/models/it_IT-riccardo-x_low.onnx")
+        for text, model in (("Hello.", self.en), ("Hola.", self.es), ("Hi.", self.en)):
+            run = self.say(text, model)
+            self.finish(run)
+            run.stop()
+        self.say("Ciao.", it)  # Spanish was used least recently
+        english, spanish, _italian = self.popen.processes
+        spanish.kill.assert_called_once_with()
+        english.kill.assert_not_called()
+        self.assertEqual(self.engine.voices_running, [self.en, it])
+
+    def test_one_kept_voice_is_the_old_one_at_a_time_behaviour(self) -> None:
+        engine = PiperEngine(
+            self.directory,
+            popen=self.popen,
+            which=self.tools.get,
+            clock=self.clock,
+            keep_voices=1,
+            background_reaper=False,
+        )
+        self.addCleanup(engine.close)
+        engine.prepare(self.en)
+        engine.prepare(self.es)
+        self.popen.processes[0].kill.assert_called_once_with()
+        self.assertEqual(engine.voices_running, [self.es])
+
+    def test_a_voice_unused_for_the_idle_limit_is_stopped(self) -> None:
+        run = self.say("Hello.", self.en)
+        self.finish(run)
+        run.stop()
+        run = self.say("Hola.", self.es)
+        self.finish(run)
+        run.stop()
+        self.clock.now += 29 * 60
+        self.engine.reap()
+        self.assertEqual(len(self.engine.voices_running), 2)
+        # English was last used 29 minutes ago, Spanish 29 minutes ago too; use
+        # Spanish again, then let English pass the limit.
+        run = self.say("Otra vez.", self.es)
+        self.finish(run)
+        run.stop()
+        self.clock.now += 2 * 60
+        self.engine.reap()
+        self.assertEqual(self.engine.voices_running, [self.es])
+        self.popen.processes[0].kill.assert_called_once_with()
+        self.popen.processes[1].kill.assert_not_called()
+
+    def test_a_voice_that_is_speaking_is_not_stopped_by_the_idle_limit(self) -> None:
+        self.say("Hello.", self.en)  # still being spoken: never released
+        self.clock.now += 3 * 3600
+        self.engine.reap()
+        self.assertEqual(self.engine.voices_running, [self.en])
+        self.popen.processes[0].kill.assert_not_called()
+
+    def test_an_interrupt_replaces_only_the_engine_that_was_speaking(self) -> None:
+        for text, model in (("Hello.", self.en), ("Hola.", self.es)):
+            run = self.say(text, model)
+            self.finish(run)
+            run.stop()
+        run = self.say("A long reply.", self.en)
+        run.stop()  # cut
+        english, spanish, english2 = self.popen.processes
+        english.kill.assert_called_once_with()
+        spanish.kill.assert_not_called()
+        self.assertEqual(english2.stdin.data, b"")  # loading in the background
+        self.assertEqual(self.engine.voices_running, [self.es, self.en])
+
+    def test_the_label_is_about_the_engine_state_not_the_speed_of_the_first_audio(
+        self,
+    ) -> None:
+        # Owner's live run: turn 2, same language, no interrupt, labelled
+        # "loading (1.0 s)". A warm engine can be slow to start talking (a long
+        # first sentence, the model using the CPU): that is not loading.
         first = self.say("Hello.", self.en)
+        self.assertEqual(first.engine_state, "loading")  # started for this reply
         self.finish(first)
         first.stop()
-        second = self.say("Hola.", self.es)
-        english, spanish = self.popen.processes
-        english.kill.assert_called_once_with()
-        self.assertIn(str(self.es), self.popen.calls[1]["argv"])
-        self.assertEqual(spanish.stdin.data, b"Hola.\n")
-        self.finish(second)
-        second.stop()
-        self.say("Hello again.", self.en)
-        self.assertEqual(len(self.popen.processes), 3)
-        spanish.kill.assert_called_once_with()  # never two voices at once
+        self.clock.now += 20
+        second = self.engine.start("A long first sentence, with the CPU busy.", self.en)
+        self.clock.now += 1.04  # slow: over a second until the first audio
+        self.popen.audio[0].write(CHUNK)
+        drain(second)
+        self.assertEqual(second.engine_state, "warm")
+        self.assertAlmostEqual(second.engine_seconds or 0, 1.04)
+        self.assertEqual(len(self.popen.processes), 1)  # a healthy engine is kept
+        line = timing_line(
+            model_timing({}, 1.0),
+            SpeechTiming(0.5, 3.0, engine=1.04, engine_state=second.engine_state),
+        )
+        self.assertTrue(line.endswith("engine: warm (1.0 s)"), line)
+
+    def test_an_engine_started_early_is_warm_once_the_voice_had_time_to_load(
+        self,
+    ) -> None:
+        self.engine.prepare(self.en)
+        self.clock.now += 2  # the model answered quickly: the voice may still load
+        soon = self.engine.start("Hello.", self.en)
+        self.assertEqual(soon.engine_state, "loading")
+        soon.stop()  # not clean (no audio): replaced by a new engine
+        self.clock.now += 10
+        later = self.engine.start("Hello again.", self.en)
+        self.assertEqual(later.engine_state, "warm")  # started 10 s ago, never spoke
+
+    def test_after_an_interrupt_the_next_reply_is_loading_then_warm(self) -> None:
+        run = self.say("A long reply.")
+        run.stop()  # cut: a new engine starts loading now
+        self.clock.now += 2
+        self.assertEqual(self.engine.start("Next.", self.en).engine_state, "loading")
 
     def test_text_is_never_on_a_command_line_or_in_the_environment(self) -> None:
         for _ in range(3):
@@ -308,7 +424,8 @@ class PersistentEngineTest(unittest.TestCase):
         self.assertAlmostEqual(run.engine_seconds or 0, 0.3)
         for seconds, state in ((0.3, "warm"), (4.9, "loading")):
             line = timing_line(
-                model_timing({}, 1.0), SpeechTiming(0.5, 3.0, engine=seconds)
+                model_timing({}, 1.0),
+                SpeechTiming(0.5, 3.0, engine=seconds, engine_state=state),
             )
             self.assertTrue(line.endswith(f"engine: {state} ({seconds:.1f} s)"), line)
         self.assertNotIn(
@@ -332,6 +449,35 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(speak_config({PERSISTENT_ENV: "1"}).persistent)
         self.assertTrue(speak_config({PERSISTENT_ENV: "maybe"}).persistent)
         self.assertFalse(speak_config({PERSISTENT_ENV: "0"}).persistent)
+
+
+class VoiceSettingsTest(unittest.TestCase):
+    def test_kept_voices_are_one_to_three_and_the_idle_limit_five_to_240_minutes(
+        self,
+    ) -> None:
+        for good in ("1", "2", "3"):
+            self.assertEqual(
+                speak_config({KEEP_VOICES_ENV: good}).keep_voices, int(good)
+            )
+        for good in ("5", "30", "240"):
+            config = speak_config({VOICE_IDLE_ENV: good})
+            self.assertEqual(config.voice_idle_minutes, int(good))
+        for bad in ("0", "4", "-1", "x", "2.5", "99", ""):
+            self.assertEqual(speak_config({KEEP_VOICES_ENV: bad}).keep_voices, 2, bad)
+        for bad in ("4", "241", "0", "soon", "30.5", ""):
+            config = speak_config({VOICE_IDLE_ENV: bad})
+            self.assertEqual(config.voice_idle_minutes, 30, bad)
+        self.assertEqual(speak_config({}).keep_voices, 2)
+
+    def test_a_bad_value_is_reported_on_stderr_when_speaking_starts(self) -> None:
+        self.assertEqual(speak_config_problems({}), [])
+        problems = speak_config_problems({KEEP_VOICES_ENV: "9", VOICE_IDLE_ENV: "soon"})
+        self.assertEqual(len(problems), 2)
+        self.assertIn(
+            "STEEL_SPEAK_KEEP_VOICES='9' is not a whole number from 1 to 3", problems[0]
+        )
+        self.assertIn("2 is used", problems[0])
+        self.assertIn("30 is used", problems[1])
 
 
 class SampleRateTest(unittest.TestCase):
@@ -363,6 +509,16 @@ class SampleRateTest(unittest.TestCase):
 
 
 class CheckOutputTest(SpeakCase):
+    def test_a_bad_voice_setting_is_reported_when_the_speaker_is_made(self) -> None:
+        self.write_grants(speak_grant())
+        err = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {KEEP_VOICES_ENV: "9"}),
+            contextlib.redirect_stderr(err),
+        ):
+            ChatSpeaker(self.home, tool=self.tool(), keys=self.keys)
+        self.assertIn("STEEL_SPEAK_KEEP_VOICES='9'", err.getvalue())
+
     def check(self, env: dict[str, str]) -> str:
         from steel.speak.commands import speak_check
 
@@ -379,9 +535,14 @@ class CheckOutputTest(SpeakCase):
 
     def test_check_tells_how_long_the_engine_lives_and_what_it_costs(self) -> None:
         out = self.check({IDLE_END_ENV: "2"})
-        self.assertIn("one engine per voice stays loaded", out)
-        self.assertIn("about 142 MiB of RAM each", out)
+        self.assertIn("the engines of the last 2 voice(s) used stay loaded", out)
+        self.assertIn("about 142 MiB of RAM each, so up to 284 MiB", out)
+        self.assertIn("unused for 30 minutes is stopped", out)
         self.assertIn("a reply ends after 2 s without new audio", out)
+        out = self.check({KEEP_VOICES_ENV: "3", VOICE_IDLE_ENV: "60"})
+        self.assertIn("last 3 voice(s)", out)
+        self.assertIn("up to 426 MiB", out)
+        self.assertIn("unused for 60 minutes", out)
         out = self.check({PERSISTENT_ENV: "0"})
         self.assertIn("one engine process per reply", out)
 
@@ -491,6 +652,61 @@ class PersistentTurnTest(SpeakCase):
             "every engine runs in its own network namespace",
         )
 
+    def test_english_spanish_english_keeps_both_voices_with_no_network_and_no_file(
+        self,
+    ) -> None:
+        speaker = self.speaker()
+        speaker.say("warm up")
+        config = self.config()
+        config.memory.enabled = False
+        session = open_session(
+            config,
+            self.home,
+            engine=ReplyEngine(
+                "Sure, that works for me today.",
+                "Hola, hoy hace sol en Valencia y todo va muy bien.",
+                "Yes, that is what I think as well.",
+            ),
+        )
+        real_open = builtins.open
+
+        def guarded(file: Any, mode: str = "r", *a: Any, **k: Any) -> Any:
+            if any(flag in mode for flag in "wx+") or (
+                "a" in mode and not str(file).endswith("audit.jsonl")
+            ):
+                raise AssertionError(f"tried to write {file!r}")
+            return real_open(file, mode, *a, **k)
+
+        def forbidden(*_: Any, **__: Any) -> Any:
+            raise AssertionError("no network and no temporary file in a turn")
+
+        with (
+            mock.patch(
+                "builtins.input",
+                side_effect=[
+                    "hello there",
+                    "¿qué tiempo hace hoy en Valencia?",
+                    "and in English again",
+                    "/quit",
+                ],
+            ),
+            mock.patch.object(builtins, "open", guarded),
+            mock.patch.object(tempfile, "mkstemp", forbidden),
+            mock.patch.object(tempfile, "NamedTemporaryFile", forbidden),
+            mock.patch.object(socket.socket, "connect", forbidden),
+            mock.patch.object(socket.socket, "connect_ex", forbidden),
+            mock.patch.object(socket, "create_connection", forbidden),
+            mock.patch.object(socket, "getaddrinfo", forbidden),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            run_repl(session, None, speaker)
+        session.close(5)
+        self.assertEqual(len(self.popen.processes), 2)  # three replies, two voices
+        self.assertTrue(
+            all("--net" in c["argv"] for c in self.popen.calls),
+            "every engine runs in its own network namespace",
+        )
+
 
 @unittest.skipUnless(shutil.which("setpriv"), "util-linux setpriv is not installed")
 class RealProcessTest(unittest.TestCase):
@@ -559,6 +775,43 @@ class RealProcessTest(unittest.TestCase):
             self.assertNotIn(secret, cmdline)
             self.assertNotIn(secret, environ)
 
+    def test_two_voices_run_as_two_processes_and_close_leaves_none(self) -> None:
+        engine = self.engine()
+        spanish = self.root / "es.onnx"
+        first = engine.start(SECRET, self.model)
+        self.assertEqual(len(self.read_all(first)), 8192)
+        first.stop()
+        second = engine.start("Hola.", spanish)
+        self.assertEqual(len(self.read_all(second)), 8192)
+        second.stop()
+        pids = _processes_with(self.marker)
+        self.assertEqual(len(pids), 2)  # both voices stay loaded
+        again = engine.start("Again.", self.model)  # English is not reloaded
+        self.assertEqual(len(self.read_all(again)), 8192)
+        again.stop()
+        self.assertEqual(_processes_with(self.marker), pids)
+        for pid in pids:  # the text is on no command line and in no environment
+            cmdline = Path(f"/proc/{pid}/cmdline").read_bytes()
+            environ = Path(f"/proc/{pid}/environ").read_bytes()
+            for secret in (b"4711", b"Mara", b"Again", b"Hola"):
+                self.assertNotIn(secret, cmdline)
+                self.assertNotIn(secret, environ)
+        engine.close()
+        self.assertEqual(self.gone(), [])
+
+    def test_the_third_voice_stops_the_least_recently_used_real_process(self) -> None:
+        engine = self.engine()
+        for name in ("a", "b", "c"):
+            run = engine.start("Hello.", self.root / f"{name}.onnx")
+            self.read_all(run)
+            run.stop()
+        self.assertEqual(len(engine.voices_running), 2)
+        deadline = time.monotonic() + 5
+        while len(_processes_with(self.marker)) > 2 and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertEqual(len(_processes_with(self.marker)), 2)
+        self.assertEqual([p.name for p in engine.voices_running], ["b.onnx", "c.onnx"])
+
     def test_an_interrupt_replaces_the_process_and_close_leaves_none(self) -> None:
         engine = self.engine()
         run = engine.start("A long reply.", self.model)
@@ -614,8 +867,9 @@ class RealProcessTest(unittest.TestCase):
             keys=FakeKeys(),
         )
         speaker = ChatSpeaker(home, tool=tool, keys=FakeKeys())
+        engine.prepare(self.root / "other.onnx")  # a second voice is loaded too
         speaker.prepare("hello")
-        self.assertEqual(len(_processes_with(self.marker)), 1)
+        self.assertEqual(len(_processes_with(self.marker)), 2)
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertIsNone(speaker.say("Hello there."))  # the chat goes on
         self.assertEqual(interrupts, [1])
@@ -631,6 +885,7 @@ class RealProcessTest(unittest.TestCase):
             "tools = {'unshare': str(root / 'unshare-stand-in'),"
             " 'setpriv': os.environ['STAND_IN_SETPRIV']}\n"
             "engine = PiperEngine(root / 'piper', which=tools.get)\n"
+            "engine.prepare(root / 'other.onnx')\n"
             "run = engine.start('Hello.', root / 'voice.onnx')\n"
             "print('ready', flush=True)\n"
             "sys.stdin.read()\n"
@@ -657,7 +912,7 @@ class RealProcessTest(unittest.TestCase):
 
         self.addCleanup(stop_steel)
         self.assertEqual(steel.stdout.readline().strip(), "ready")
-        self.assertEqual(len(_processes_with(self.marker)), 1)
+        self.assertEqual(len(_processes_with(self.marker)), 2)  # two voices
         steel.kill()  # no chance to clean up
         steel.wait(5)
         self.assertEqual(self.gone(), [])

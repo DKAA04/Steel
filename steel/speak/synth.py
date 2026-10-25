@@ -57,13 +57,16 @@ FIRST_AUDIO_WAIT = 45.0
 # Seconds of silence after a reply's last audio that count as its end, at least;
 # a long sentence needs longer (see ``idle_gap``).
 DEFAULT_IDLE_END = 1.5
+DEFAULT_KEEP_VOICES = 2
+DEFAULT_VOICE_IDLE_MINUTES = 30.0
 # Synthesis takes about 0.07 s per second of speech (measured); one second of
 # speech is about 15 characters. So a sentence of N characters needs about
 # N * 0.005 s; the gap is twice that, to be safe.
 _GAP_PER_CHAR = 0.01
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+")
-# The engine counts as "warm" if the first audio came this soon after the text.
-WARM_FIRST_AUDIO = 1.0
+# An engine that has not yet spoken is "warm" when the text reaches it if it was
+# started at least this long before: loading a voice took 3.5 to 5 s here.
+VOICE_LOAD_SECONDS = 6.0
 
 
 class EngineUnavailable(RuntimeError):
@@ -177,7 +180,10 @@ class _Engine:
 
     process: Any
     model: Path
+    started: float  # clock() when the process was started
     served: int = 0  # replies it has finished cleanly
+    last_used: float = 0.0
+    busy: bool = False  # a reply is being spoken by it
 
 
 class PersistentRun:
@@ -193,11 +199,16 @@ class PersistentRun:
         *,
         idle_end: float,
         clock: Callable[[], float],
+        state: str,
     ) -> None:
         self._owner = owner
         self._engine = engine
         self._idle_end = idle_end
         self._clock = clock
+        # "warm": the engine was running with its voice loaded when the text
+        # arrived. "loading": it was started (or restarted) for this reply, or
+        # shortly before it, so the voice may still have been loading.
+        self.engine_state = state
         self._sent = self._last = clock()
         self._heard = False  # any audio yet
         self._ended = False
@@ -251,6 +262,9 @@ class PiperEngine:
         idle_end: float = DEFAULT_IDLE_END,
         persistent: bool = True,
         clock: Callable[[], float] = time.monotonic,
+        keep_voices: int = DEFAULT_KEEP_VOICES,
+        voice_idle_seconds: float = DEFAULT_VOICE_IDLE_MINUTES * 60.0,
+        background_reaper: bool = True,
     ) -> None:
         self._directory = directory
         self._popen = popen
@@ -258,9 +272,21 @@ class PiperEngine:
         self._idle_end = idle_end
         self._persistent = persistent
         self._clock = clock
+        # Without the long-lived engine only the one prepared for the next reply
+        # may wait, as in Phase 5b.
+        self._keep = keep_voices if persistent else 1
+        self._voice_idle = voice_idle_seconds
+        self._reaper = background_reaper
         self._lock = threading.Lock()
-        self._current: _Engine | None = None
+        self._engines: dict[Path, _Engine] = {}  # by voice, least recently used first
+        self._timer: threading.Timer | None = None
         self._atexit = False
+
+    @property
+    def voices_running(self) -> list[Path]:
+        """The voices whose engines are running, least recently used first."""
+        with self._lock:
+            return list(self._engines)
 
     def _spawn(self, model: Path) -> Any:
         """Start the engine for *model*. It waits for text on its stdin."""
@@ -308,46 +334,90 @@ class PiperEngine:
         ready, _, _ = select.select([process.stdout], [], [], 0)
         return bool(ready)
 
-    def _register_exit(self) -> None:
+    # ---- the engines (every method below holds the lock, or says it must) ----
+
+    def _stop_engine(self, engine: _Engine) -> None:
+        if self._engines.get(engine.model) is engine:
+            del self._engines[engine.model]
+        try:
+            engine.process.stdin.close()
+        except (OSError, ValueError):
+            pass
+        PiperRun(engine.process).stop()
+
+    def _stop_all(self) -> None:
+        for engine in list(self._engines.values()):
+            self._stop_engine(engine)
+
+    def _start_engine(self, model: Path) -> _Engine:
+        """A new long-lived engine for *model*, the most recently used. The least
+        recently used idle ones beyond the limit are stopped. Caller holds the lock."""
+        now = self._clock()
+        engine = _Engine(self._spawn(model), model, started=now, last_used=now)
+        self._engines[model] = engine
         if not self._atexit:
             atexit.register(self.close)  # no engine outlives a normal exit
             self._atexit = True
-
-    def _stop_current(self) -> None:
-        """Stop the engine, if any. Caller holds the lock."""
-        if self._current is not None:
-            process = self._current.process
-            self._current = None
-            try:
-                process.stdin.close()
-            except (OSError, ValueError):
-                pass
-            PiperRun(process).stop()
-
-    def _start_current(self, model: Path) -> _Engine:
-        """A new long-lived engine for *model*. Caller holds the lock."""
-        engine = _Engine(self._spawn(model), model)
-        self._current = engine
-        self._register_exit()
+        while len(self._engines) > self._keep:
+            idle = [e for e in self._engines.values() if not e.busy and e is not engine]
+            if not idle:
+                break
+            self._stop_engine(min(idle, key=lambda e: e.last_used))
+        self._schedule()
         return engine
+
+    def _touch(self, engine: _Engine) -> None:
+        engine.last_used = self._clock()
+        self._engines.pop(engine.model, None)
+        self._engines[engine.model] = engine  # most recently used last
+        self._schedule()
+
+    def _usable(self, engine: _Engine | None) -> bool:
+        return engine is not None and engine.process.poll() is None
+
+    def _schedule(self) -> None:
+        """Check for engines unused for too long once they could have expired."""
+        if not self._reaper or self._timer is not None:
+            return
+        timer = threading.Timer(self._voice_idle, self._reaper_fired)
+        timer.daemon = True
+        self._timer = timer
+        timer.start()
+
+    def _reaper_fired(self) -> None:
+        with self._lock:
+            self._timer = None
+            self._reap_locked()
+            if self._engines:
+                self._schedule()
+
+    def reap(self) -> None:
+        """Stop the engines nobody has used for the idle limit."""
+        with self._lock:
+            self._reap_locked()
+
+    def _reap_locked(self) -> None:
+        now = self._clock()
+        for engine in list(self._engines.values()):
+            if not engine.busy and now - engine.last_used >= self._voice_idle:
+                self._stop_engine(engine)
 
     def prepare(self, model: Path) -> bool:
         """Have an engine for *model* loading (or loaded) now, so the voice is
-        ready before the reply exists. A different voice's engine is stopped.
+        ready before the reply exists. Other voices stay up (up to the limit).
 
-        Whether one is waiting.
+        Whether one is running.
         """
         with self._lock:
-            engine = self._current
-            if (
-                engine is not None
-                and engine.model == model
-                and engine.process.poll() is None
-            ):
+            engine = self._engines.get(model)
+            if self._usable(engine):
+                assert engine is not None
+                self._touch(engine)
                 return True
-            self._stop_current()
+            if engine is not None:
+                self._stop_engine(engine)
             try:
-                self._start_current(model)
+                self._start_engine(model)
             except EngineUnavailable:
                 return False
             return True
@@ -364,13 +434,15 @@ class PiperEngine:
         """The old way, also the fallback: a process for this reply alone. A
         prepared engine for this voice is used; stdin closes after the text."""
         with self._lock:
-            engine, self._current = self._current, None
+            engine = self._engines.pop(model, None)
             process = None
             if engine is not None:
-                if engine.model == model and engine.process.poll() is None:
+                if engine.process.poll() is None:
                     process = engine.process
-                else:  # another voice, or it died: not used
+                else:
                     PiperRun(engine.process).stop()
+            if not self._persistent:  # any engine for another voice is useless
+                self._stop_all()
         if process is not None:
             try:
                 self._write(process, text, last=True)
@@ -384,54 +456,69 @@ class PiperEngine:
     def _start_persistent(self, text: str, model: Path) -> PersistentRun | None:
         """The reply on the long-lived engine, or None if that failed."""
         with self._lock:
-            engine = self._current
+            engine = self._engines.get(model)
+            now = self._clock()
             usable = (
-                engine is not None
-                and engine.model == model
-                and engine.process.poll() is None
+                self._usable(engine)
+                and engine is not None
                 # Audio waiting in the pipe belongs to an earlier reply (it
                 # arrived after its idle gap). It cannot be told apart from the
                 # new reply's, so the engine is replaced.
                 and not self._has_unread_audio(engine.process)
             )
-            if not usable:
-                self._stop_current()
+            if usable and engine is not None:
+                warm = engine.served > 0 or now - engine.started >= VOICE_LOAD_SECONDS
+                self._touch(engine)
+            else:
+                if engine is not None:
+                    self._stop_engine(engine)
                 try:
-                    engine = self._start_current(model)
+                    engine = self._start_engine(model)
                 except EngineUnavailable:
                     return None
-            assert engine is not None
+                warm = False
+            engine.busy = True
         try:
             self._write(engine.process, text, last=False)
         except EngineUnavailable:
             with self._lock:
-                if self._current is engine:
-                    self._current = None
+                if self._engines.get(model) is engine:
+                    del self._engines[model]
             return None
         return PersistentRun(
-            self, engine, idle_end=idle_gap(text, self._idle_end), clock=self._clock
+            self,
+            engine,
+            idle_end=idle_gap(text, self._idle_end),
+            clock=self._clock,
+            state="warm" if warm else "loading",
         )
 
     def _release(self, run: PersistentRun) -> None:
         """The reply is over. A clean engine stays loaded for the next reply; any
-        other (interrupted, died, silent) is replaced by a new one, which loads
-        in the background while the owner reads, so the next reply is not slow
-        and no stale audio can reach it."""
+        other (interrupted, died, silent) is replaced by a new one of the SAME
+        voice, which loads in the background while the owner reads, so the next
+        reply is not slow and no stale audio can reach it. Other voices are not
+        touched."""
         with self._lock:
             engine = run._engine
-            if self._current is not engine:
-                PiperRun(engine.process).stop()  # closed meanwhile (exit, voice change)
+            engine.busy = False
+            if self._engines.get(engine.model) is not engine:
+                PiperRun(engine.process).stop()  # closed meanwhile (exit, eviction)
                 return
             if run.clean:
                 engine.served += 1
+                engine.last_used = self._clock()
                 return
-            self._stop_current()
+            self._stop_engine(engine)
             try:
-                self._start_current(engine.model)
+                self._start_engine(engine.model)
             except EngineUnavailable:
                 pass  # the next reply reports it
 
     def close(self) -> None:
-        """Stop the engine, if any."""
+        """Stop every engine."""
         with self._lock:
-            self._stop_current()
+            if self._timer is not None:
+                self._timer.cancel()
+                self._timer = None
+            self._stop_all()
