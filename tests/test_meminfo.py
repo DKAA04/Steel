@@ -88,6 +88,7 @@ class DoctorMemoryTest(base.HomeTestCase):
             out = io.StringIO()
             with (
                 mock.patch.object(meminfo, "MEMINFO", path),
+                mock.patch.dict("os.environ", {"HOME": str(path.parent)}),
                 contextlib.redirect_stdout(out),
             ):
                 code = main(["doctor"])

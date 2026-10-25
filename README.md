@@ -207,7 +207,7 @@ python scripts/latency_check.py /tmp/steel-lat  # live model timings, scratch di
 
 ## Licence
 
-STEEL's own code and documents are licensed under the Apache License 2.0 ([LICENSE](LICENSE); the copyright line there is a placeholder the owner may replace). [NOTICE](NOTICE) lists what STEEL builds on and uses: OpenJarvis (Apache-2.0; the ported file is in [docs/PROVENANCE.md](docs/PROVENANCE.md)), faster-whisper and the Whisper models (MIT), onnxruntime (MIT), Piper (GPL-3.0-or-later, run as a separate program and not distributed with STEEL) and the voices with their licences, including the M-AILABS notice for the Italian voice.
+STEEL's own code and documents are licensed under the Apache License 2.0 ([LICENSE](LICENSE), "Copyright 2026 DKAA04"). [NOTICE](NOTICE) lists what STEEL builds on and uses: OpenJarvis (Apache-2.0; the ported file is in [docs/PROVENANCE.md](docs/PROVENANCE.md)), faster-whisper and the Whisper models (MIT), onnxruntime (MIT), Piper (GPL-3.0-or-later, run as a separate program and not distributed with STEEL) and the voices with their licences, including the M-AILABS notice for the Italian voice.
 
 **Downloaded models and voices are not part of this repository** and keep their own licences: the Whisper models, the Ollama models, Piper's engine environment and the Piper voices are fetched onto your machine by you or by the setup scripts. This is a record of the terms, not legal advice.
 

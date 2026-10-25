@@ -847,6 +847,73 @@ class RealProcessTest(unittest.TestCase):
         engine.close()
         self.assertEqual(self.gone(), [])
 
+    def speaker_with(self, sink: Any) -> tuple[PiperEngine, ChatSpeaker]:
+        """A chat speaker on a real engine class with stand-in processes."""
+        from speak_helpers import install_defaults
+        from voice_helpers import FakeTTY
+
+        from steel.speak.config import SpeakConfig
+        from steel.speak.indicator import SpeakingIndicator
+        from steel.tools import get_speak_tool
+
+        home = Path(tempfile.mkdtemp(prefix="steel-persist-"))
+        self.addCleanup(shutil.rmtree, home, True)
+        engine = self.engine()
+        install_defaults(home)
+        (home / "steel_policy.json").write_text(
+            '{"agents":[{"agent_id":"voice","grants":'
+            '[{"capability":"audio:play","pattern":"speak"}]}]}'
+        )
+        (home / "steel_policy.json").chmod(0o600)
+        tool = get_speak_tool(
+            home,
+            config=SpeakConfig(),
+            engine=engine,
+            open_sink=sink,
+            indicator=SpeakingIndicator(FakeTTY()),
+            keys=FakeKeys(),
+        )
+        return engine, ChatSpeaker(home, tool=tool, keys=FakeKeys())
+
+    def test_an_engine_killed_in_the_middle_of_playback_ends_cleanly(self) -> None:
+        """Clean-up a (Phase 5c): a real process killed with SIGKILL mid-reply."""
+        played: list[int] = []
+        killed: list[int] = []
+
+        class KillOnFirstWrite(FakeSink):
+            def write(self, data: memoryview) -> None:
+                super().write(data)
+                played.append(len(data))
+                if not killed:  # the engine dies while its audio is playing
+                    (pid,) = engines()
+                    os.kill(pid, signal.SIGKILL)
+                    killed.append(pid)
+
+        def engines() -> list[int]:
+            return _processes_with(self.marker)
+
+        _engine, speaker = self.speaker_with(KillOnFirstWrite)
+        speaker.prepare("hello")
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            self.assertIsNone(speaker.say("Hello there, a reply."))
+        lines = [x for x in out.getvalue().splitlines() if "engine stopped" in x]
+        self.assertEqual(len(lines), 1, out.getvalue())
+        self.assertTrue(played)
+        # The killed process is gone; one replacement is loading.
+        deadline = time.monotonic() + 5
+        while killed[0] in engines() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertNotIn(killed[0], engines())
+        self.assertEqual(len(engines()), 1)
+        # STEEL stays usable: the next reply plays in full on the new engine.
+        played.clear()
+        with contextlib.redirect_stdout(io.StringIO()):
+            speaker.say("And the next one.")
+        self.assertEqual(sum(played), 8192)
+        speaker.close()
+        self.assertEqual(self.gone(), [])
+
     def test_ctrl_c_while_speaking_leaves_no_process_after_the_chat_closes_it(
         self,
     ) -> None:
@@ -857,32 +924,7 @@ class RealProcessTest(unittest.TestCase):
                 interrupts.append(1)
                 raise KeyboardInterrupt
 
-        home = Path(tempfile.mkdtemp(prefix="steel-persist-"))
-        self.addCleanup(shutil.rmtree, home, True)
-        engine = self.engine()
-        from speak_helpers import install_defaults
-
-        install_defaults(home)
-        (home / "steel_policy.json").write_text(
-            '{"agents":[{"agent_id":"voice","grants":'
-            '[{"capability":"audio:play","pattern":"speak"}]}]}'
-        )
-        (home / "steel_policy.json").chmod(0o600)
-        from voice_helpers import FakeTTY
-
-        from steel.speak.config import SpeakConfig
-        from steel.speak.indicator import SpeakingIndicator
-        from steel.tools import get_speak_tool
-
-        tool = get_speak_tool(
-            home,
-            config=SpeakConfig(),
-            engine=engine,
-            open_sink=Interrupting,
-            indicator=SpeakingIndicator(FakeTTY()),
-            keys=FakeKeys(),
-        )
-        speaker = ChatSpeaker(home, tool=tool, keys=FakeKeys())
+        engine, speaker = self.speaker_with(Interrupting)
         engine.prepare(self.root / "other.onnx")  # a second voice is loaded too
         speaker.prepare("hello")
         self.assertEqual(len(_processes_with(self.marker)), 2)

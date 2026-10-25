@@ -74,8 +74,13 @@ it_IT-riccardo-x_low
   of the data keep the copyright notice, the conditions and the disclaimer,
   which follow word for word. The dataset's own page
   (https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/) could not
-  be reached on 2026-10-25; this text was taken that day from the README of
-  the dataset author's repository,
+  be reached on 2026-10-25 (checked twice that day: the name www.caito.de
+  did not resolve, and the Internet Archive could not be reached from the
+  tool used), so the original could not be compared. The University of
+  Maryland, Baltimore County dataset catalogue
+  (https://cisaad.umbc.edu/the-m-ailabs-speech-dataset/) gives the same
+  first copyright line but not the conditions. The text below was taken on
+  2026-10-25 from the README of the dataset author's repository,
   https://github.com/i-celeste-aurora/m-ailabs-dataset
   (README.md, SHA-256
   8cd5aee8d0b8caff7119987bc6e0e4bc7d725f7c52ccc51d7edff865caf83b25), which

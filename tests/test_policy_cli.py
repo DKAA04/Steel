@@ -8,6 +8,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import os
 from pathlib import Path
 from unittest import mock
 
@@ -22,6 +23,13 @@ GRANTS = "steel_policy.json"
 
 
 class PolicyCliCase(base.HomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        # Doctor also looks for $HOME/.cache/...; keep the real one out of it.
+        patch = mock.patch.dict(os.environ, {"HOME": str(self.home.parent)})
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def run_cli(self, *argv: str, expect: int = 0) -> str:
         out = io.StringIO()
         with contextlib.redirect_stdout(out), contextlib.redirect_stderr(out):

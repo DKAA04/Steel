@@ -84,6 +84,9 @@ def _doctor() -> int:
     from steel.meminfo import memory_report
 
     print("\n".join(memory_report()))
+    from steel.offline import telemetry_queue_lines
+
+    print("\n".join(telemetry_queue_lines()))  # a warning only, like memory
     return 0 if ok else 1
 
 
