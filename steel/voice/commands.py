@@ -49,13 +49,14 @@ EXAMPLE_GRANT = """{
 }"""
 
 
-def capture_devices(pcm_list: Path = PCM_LIST) -> list[str] | None:
+def capture_devices(pcm_list: Path | None = None) -> list[str] | None:
     """Names of the capture devices, from the kernel's list. None if unreadable.
 
-    Reading this file opens no audio device.
+    Reading this file opens no audio device. The path is looked up at call time
+    so tests can point it at a fake list.
     """
     try:
-        lines = pcm_list.read_text(encoding="utf-8").splitlines()
+        lines = (pcm_list or PCM_LIST).read_text(encoding="utf-8").splitlines()
     except OSError:
         return None
     found = []
@@ -74,7 +75,7 @@ def _directory_size_mib(path: Path) -> int:
     return round(sum(p.stat().st_size for p in path.iterdir() if p.is_file()) / 2**20)
 
 
-def voice_check(home: Path, *, pcm_list: Path = PCM_LIST) -> int:
+def voice_check(home: Path, *, pcm_list: Path | None = None) -> int:
     """Report what voice input has and lacks. Read only; no microphone is opened."""
     config = voice_config()
     print("STEEL voice check (read only: the microphone is not opened)")

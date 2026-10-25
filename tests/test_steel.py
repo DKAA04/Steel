@@ -93,6 +93,10 @@ class HomeTestCase(unittest.TestCase):
         meminfo = mock.patch("steel.meminfo.MEMINFO", self.home.parent / "meminfo")
         meminfo.start()
         self.addCleanup(meminfo.stop)
+        # The same for the kernel's list of audio devices (steel voice check).
+        pcm = mock.patch("steel.voice.commands.PCM_LIST", self.home.parent / "pcm")
+        pcm.start()
+        self.addCleanup(pcm.stop)
         # OpenJarvis creates these two files on first run.
         (self.home / "MEMORY.md").write_text("# Agent Memory\n\n")
         (self.home / "USER.md").write_text("# User Profile\n\n")
