@@ -74,6 +74,19 @@ class ReplyEngine(base.FakeEngine):
         return answer
 
 
+class MessageEngine(base.FakeEngine):
+    """Records every message of every chat call, not only the system prompt."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_messages: list[str] = []
+
+    def generate(self, messages: Any, *, model: str, **kw: Any) -> dict[str, Any]:
+        if messages and messages[0].content != base.EXTRACTOR_PROMPT:
+            self.chat_messages += [m.content for m in messages]
+        return super().generate(messages, model=model, **kw)
+
+
 class SlashCase(base.HomeTestCase):
     def setUp(self) -> None:
         super().setUp()
@@ -294,6 +307,35 @@ class ShownFirstThenAddedTest(SlashCase):
         # A look in chat never saves a room note.
         notes = [e for e in SteelMemory(self.home).entries() if e.source == "room"]
         self.assertEqual(len(notes), 1)  # only the one from setUp
+
+
+class RoomNotesOnDemandTest(SlashCase):
+    """Room notes reach the model only through /room and the owner's Enter."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.write_grants(ALL_CHAT_GRANTS)
+
+    def sent_to_model(self) -> str:
+        return "\n".join(self.engine.chat_messages)
+
+    def test_a_saved_room_note_reaches_the_model_only_after_room_and_enter(
+        self,
+    ) -> None:
+        self.engine = MessageEngine()
+        slash = self.make()
+        self.session_obj.ask("what is on my desk?")
+        self.assertNotIn("blue folder", self.sent_to_model())
+        self.terminal.answers = [False]
+        self.type_line(slash, "/room folder")  # shown, then Esc
+        self.session_obj.ask("and now?")
+        self.assertNotIn("blue folder", self.sent_to_model())
+        self.terminal.answers = [True]
+        self.type_line(slash, "/room folder")  # shown, then Enter
+        self.session_obj.ask("and now?")
+        sent = self.sent_to_model()
+        self.assertIn("[Tool result from memory_search_room,", sent)
+        self.assertIn(": [Camera description] A blue folder on the desk.", sent)
 
 
 class NoChainingTest(SlashCase):
