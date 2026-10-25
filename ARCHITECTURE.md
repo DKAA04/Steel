@@ -192,21 +192,22 @@ sequenceDiagram
     participant C as steel chat
     participant M as local Ollama
     participant P as Piper (separate process)
-    C->>M: warm-up at start: "ready", 1 token (background thread)
+    C->>M: warm-up at start: first turn's system prompt + memory + "ready", 1 token (background thread)
     O->>C: message
-    C->>P: start early for the message's voice (only with the grant; no text)
+    C->>P: engine for the message's voice (started once, then kept loaded; only with the grant; no text)
     C->>M: generate (not streamed: the guardrails redact the output)
     M-->>C: reply (redacted)
-    C->>P: the cleaned reply on stdin, then end of file
-    P-->>C: audio, already loaded voice
+    C->>P: the cleaned reply as one line on stdin (stdin stays open)
+    P-->>C: audio, already loaded voice; the reply ends after the idle gap
     C-->>O: --timings: one line of numbers
 ```
 
 | Module | Role |
 | --- | --- |
 | `steel/timings.py` | `--timings`: Ollama's durations and STEEL's clock to one line of numbers |
-| `steel/warm.py` | The warm-up request and `STEEL_OLLAMA_KEEP_ALIVE` (a transport that adds `keep_alive`), for a local `OllamaEngine` only |
-| `steel/speak/synth.py` | Also: `prepare` starts the engine early and keeps at most one waiting; `start` uses it if it is for the same voice and alive; `close`; `setpriv --pdeathsig KILL` |
+| `steel/warm.py` | The warm-up request (the first turn's prefix), `STEEL_OLLAMA_KEEP_ALIVE` and `STEEL_OLLAMA_NUM_CTX` (a transport that sets `num_ctx` on every request and adds `keep_alive`), for a local `OllamaEngine` only |
+| `steel/context.py` | Cuts the oldest history so the prompt fits in `num_ctx` minus the reply reserve |
+| `steel/speak/synth.py` | Also: one long-lived engine per session (one voice at a time): `prepare` starts it early, `start` writes the reply as one line and returns a run that ends by the idle gap, `_release` keeps a clean engine and replaces any other, `close`; the process-per-reply way as fallback; `setpriv --pdeathsig KILL` |
 | `scripts/latency_check.py` | The owner's measurement: cold and warm prompts through `open_session`, Ollama's numbers, `ollama ps` PROCESSOR |
 | `docs/LATENCY.md` | The measurement plan (written first), findings (GPU, streaming, Piper), the fixes and their tests |
 

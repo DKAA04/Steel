@@ -22,7 +22,7 @@ Gathered without opening the camera. `v4l2-ctl --list-devices` and `--list-forma
 * **No camera capture and no vision tool.** `grep` for image/vision finds only the model plumbing below, eval datasets and the mining code.
 * **`Message.images`** (`core/types.py`): an optional list of base64 image strings on a message, documented as "for vision-capable models (e.g. gemma3, qwen2.5-vl)". `messages_to_dicts` (`engine/_base.py`) copies it to the `images` field, which is what Ollama's `/api/chat` expects. `OllamaEngine.generate` sends exactly that. The guardrails wrapper (`security/guardrails.py`) keeps `images` when it redacts text.
 * **Decision:** STEEL imports `OllamaEngine` and `Message` (no network is reachable except the host it is given) and the `GuardrailsEngine` redaction scanners, and **does not use `get_engine`** for the camera: that function may pick another engine than the one the owner meant, and an image must go only to a local Ollama. STEEL refuses any Ollama host that is not loopback (section 5.6).
-* `OllamaEngine.generate` defaults to a 16,384-token context window; the vision call passes `num_ctx=4096` to keep the model's memory use down.
+* `OllamaEngine.generate` defaults to a 16,384-token context window; the vision call passes `num_ctx=4096` to keep the model's memory use down. **Since Phase 5b-2** the value is `STEEL_OLLAMA_NUM_CTX` (default 4096), the same as the chat's, because Ollama reloads a model when the context of two requests differs (the vision model is the chat model by default).
 
 ## 3. What was installed
 

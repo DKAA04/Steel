@@ -16,6 +16,7 @@ CITED_FILES = (
     "test_speak_cli.py",
     "test_speak_scripts.py",
     "test_speak_policy.py",
+    "test_speak_persistent.py",
 )
 
 

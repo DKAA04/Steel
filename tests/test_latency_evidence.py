@@ -13,6 +13,7 @@ CITED_FILES = (
     "test_latency.py",
     "test_latency_check_script.py",
     "test_licence.py",
+    "test_context.py",
 )
 
 
