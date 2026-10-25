@@ -16,7 +16,8 @@ What changed from the original:
 - Matching is exact instead of ``fnmatch`` globs. The only wildcard a grant may use
   is ``memory:read:*``; deny entries may use ``*`` and any ``family:*``. File paths
   are matched on resolved path components, not strings.
-- Sensors and room notes (camera text) are never covered by a wildcard.
+- Sensors, the speaker (audio:play) and room notes (camera text) are never covered
+  by a wildcard; sensor and speaker grants must name one exact tool.
 - Every decision is written to a names-only audit log; no log, no allow.
 - Any exception inside a decision is a deny.
 - The policy file is validated strictly (unknown keys rejected, symlink or
@@ -52,6 +53,7 @@ VOCABULARY: dict[str, str] = {
     "memory:write": "add facts or notes",
     "sensor:camera": "read the camera",
     "sensor:microphone": "read the microphone",
+    "audio:play": "play sound on the speakers (spoken replies)",
     "net:outbound": "open network connections",
     "fs:read": "read files (needs a path grant)",
     "fs:write": "write files (needs a path grant)",
@@ -70,6 +72,9 @@ LEGACY_NAMES: dict[str, str] = {
     "memory:read": "memory:read:facts, memory:read:notes or memory:read:room",
 }
 SENSOR_CAPS = frozenset({"sensor:camera", "sensor:microphone"})
+# A grant for these must name one exact tool, never "*": the sensors, and the
+# speakers (what is played can be overheard; docs/SPEAK.md section 6).
+EXACT_NAME_CAPS = SENSOR_CAPS | {"audio:play"}
 # Capabilities whose resource is a file path, checked by check_path().
 PATH_CAPS = frozenset({"fs:read", "fs:write"})
 FAMILIES = frozenset(name.split(":")[0] for name in VOCABULARY)
@@ -239,7 +244,7 @@ class SteelPolicy:
                 pattern == "*" or valid_tool_name(pattern)
             ):
                 raise PolicyError("pattern must be '*' or one exact tool name")
-            if capability in SENSOR_CAPS and pattern == "*":
+            if capability in EXACT_NAME_CAPS and pattern == "*":
                 raise PolicyError(f"{capability} needs one exact tool name, not '*'")
         self._agents[agent_id].grants.append(Grant(capability, pattern, resolved))
 
@@ -368,8 +373,8 @@ class SteelPolicy:
         for grant in agent.grants:
             if not _grant_covers(grant.capability, capability):
                 continue
-            if capability in SENSOR_CAPS and grant.pattern == "*":
-                continue  # a sensor needs one exact tool name
+            if capability in EXACT_NAME_CAPS and grant.pattern == "*":
+                continue  # a sensor or the speaker needs one exact tool name
             if grant.pattern == "*" or grant.pattern == resource:
                 return True, "granted"
         return False, "no_grant"
