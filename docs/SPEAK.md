@@ -196,7 +196,7 @@ Measured on the real engine, into memory, nothing played, one sentence, one run 
 
 ## 7. No echo handling, and what hands-free would need
 
-The microphone is push-to-talk (docs/VOICE.md): it is open only while the owner holds the turn, and STEEL does not speak during a recording or record while speaking, since both run in the same loop one after the other. So the microphone never hears STEEL's own voice and no echo cancellation is needed. **A future hands-free mode would need acoustic echo cancellation** (or at least muting the microphone while speaking), or STEEL would transcribe and answer itself.
+The microphone is push-to-talk (docs/VOICE.md): it is open only while the owner holds the turn, and STEEL does not speak during a recording or record while speaking, since both run in the same loop one after the other. So the microphone never hears STEEL's own voice and no echo cancellation is needed. **A future hands-free mode would need acoustic echo cancellation** (or at least muting the microphone while speaking), or STEEL would transcribe and answer itself. **The hands-free `steel jarvis` loop (Phase 5c, docs/JARVIS.md section 5) takes the second way:** its microphone is closed while STEEL records, thinks and speaks, and reopens only after the player has exited plus 0.5 s. Interrupting a reply by voice (barge-in) would still need echo cancellation and is not implemented.
 
 ## 8. Limits
 

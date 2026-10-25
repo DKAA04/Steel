@@ -24,6 +24,7 @@ So an injection cannot make the model act on its own. What it can do: **make the
 | `memory_search_*` results (`/search`, `/notes`, `/room`) | only if the owner adds the result (rule 4) | stored text from the rows above | as their source; room results are untrusted | the result repeats injected text from the store |
 | Camera description (`/look`) | only if the owner adds the result (rule 4) | the vision model | **untrusted** | as room notes, but fresh and unconfirmed |
 | Voice transcript (`steel chat --voice`) | the user message, after the owner pressed Enter on it | Whisper, transcribing the room: the owner, but also a visitor, a TV or a radio; and Whisper can invent text on noise | the owner's confirmed words, but the content may be someone else's | a bystander's sentence confirmed by mistake becomes "the user said", reaches the extractor and can become a fact |
+| Wake transcript (`steel jarvis`, Phase 5c) | the user message, after a countdown the owner can cancel (Esc); with `STEEL_JARVIS_CONFIRM_SECONDS=0`, at once | Whisper, transcribing whoever spoke after a wake word, which may be a **false trigger**: a TV, a radio, a phone on speaker, a visitor | **untrusted**: nobody pressed a key to start the recording | a broadcast or a visitor's sentence reaches the model as a user turn and can mislead the answer, which is spoken aloud; never parsed, never run, and not sent to the extractor unless `--remember-voice` |
 | The model's own earlier replies | the chat history (RAM, last 20 messages) | the chat model, possibly repeating injected text | untrusted | an injected sentence is repeated and reinforced across turns; it is never parsed and never reaches the extractor |
 | A future tool's output | only if the owner adds it (rule 4) | anything (a web page, a file, another program) | **untrusted by default** | anything above; such tools do not exist yet |
 
@@ -104,6 +105,15 @@ At start `steel chat` sends one background request that holds the same system pr
 ### Also: spoken replies (Phase 5a)
 
 `--speak` adds an **output** channel, not an input one: after a reply is printed, STEEL itself (not the model) passes that reply to the `speak` tool, as agent `voice` with its own grant (`audio:play`). The model cannot start it, choose what it says or call anything else through it, and one reply is one spoken call. What it may say is limited by docs/SPEAK.md section 6: a reply that contains a tool-data block (`[Tool result from`, `[End of tool result]`) or camera text (`[Camera description`) is not spoken at all, nor is one the injection scanner flags or cannot check, and the rest is redacted and capped. So an injected tool result cannot be read aloud verbatim; but a model misled by data the owner added can still *say* something misleading, aloud, to whoever is in the room. Tests: docs/SPEAK.md section 10 (for example `test_speak_cli.py::ChatSpeakTest.test_a_reply_that_repeats_tool_data_is_not_spoken`).
+
+### Also: the voice channel of `steel jarvis` (Phase 5c)
+
+The Jarvis loop adds a channel the owner does not start by hand: after the wake word (real or false), whoever speaks next is transcribed. Its rules, each tested (docs/JARVIS.md section 16):
+
+* **Nothing spoken is run.** A transcript is plain text for the same `ChatSession` as typed lines. A spoken "/look", "slash search" or "open the camera" is sent to the model as words: the loop has no slash-command handler, does not reference the camera, the memory tools or tool data, and the model still cannot call a tool (`TurnTest.test_a_spoken_slash_command_is_plain_text_never_run`, `SourceHygieneTest.test_the_loop_never_reaches_slash_commands_or_the_camera`).
+* **The owner sees it first.** The transcript is shown with a countdown (default 3 s); Esc cancels and nothing is sent or kept. Setting the countdown to 0 removes this check; that is the owner's choice.
+* **Not remembered by default.** Wake transcripts never reach the fact extractor unless `steel jarvis --remember-voice`, because the speaker cannot be verified and a guest could say "remember that the owner..." (`TurnTest.test_wake_transcripts_never_reach_the_extractor_by_default`).
+* **What remains:** a television, a phone on speaker or a visitor can still put words in front of the model after a trigger, and the answer is spoken aloud to the room. The policy and these rules stop anything from being run, not the model from being misled.
 
 ## 4. Model-initiated tool calls: NOT IMPLEMENTED
 

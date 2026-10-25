@@ -1,6 +1,6 @@
 # SteelPolicy: permission policy for tool calls (design)
 
-Status: **implemented and tested (Phases 2a to 3). Two read-only memory tools exist (section 7), one microphone tool (section 7.1) and one camera tool (section 7.2); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only commands that run one are `steel tool call` (memory), `steel voice listen` / `steel chat --voice` (microphone) and `steel look` (camera).** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
+Status: **implemented and tested (Phases 2a to 3; tools added in Phases 5a and 5c). Three read-only memory tools exist (section 7), one microphone tool (section 7.1), one camera tool (section 7.2), the speak tool (section 7.4) and the always-on wake-word tool (section 7.5); nothing is registered with OpenJarvis, the chat model cannot call a tool, and the only commands that run one are `steel tool call` (memory), `steel voice listen` / `steel chat --voice` (microphone), `steel look` (camera), the chat's typed slash commands, `steel chat --speak` / `steel speak say` (speaker) and `steel jarvis` (wake word, request, speaker).** This document was written before the code (commit `eff086b`) and says what `steel/security/policy.py` and `steel/security/executor.py` do. Section 8 lists the test that proves each rule. A rule with no test there is not claimed.
 
 Sources read in full, at OpenJarvis commit `108d257188cbad85f2e50209d9a61669ea4dec33`: `src/openjarvis/security/capabilities.py`, `src/openjarvis/tools/_stubs.py` (this is where `ToolExecutor` is defined).
 
@@ -87,6 +87,7 @@ Each capability has exactly one name. A name that is not in this table is **unkn
 | `memory:write` | add facts or notes | OpenJarvis name, kept |
 | `sensor:camera` | read the camera | STEEL |
 | `sensor:microphone` | read the microphone | STEEL |
+| `sensor:microphone_always_on` | listen to the microphone continuously for a wake word (`steel jarvis`, docs/JARVIS.md); a sensor of its own, **not** covered by a `sensor:microphone` grant and the other way round (Phase 5c) | STEEL |
 | `audio:play` | play sound on the speakers (spoken replies); not a sensor, but like one it needs the exact tool name and is never covered by a wildcard (Phase 5a) | STEEL |
 | `net:outbound` | open network connections | STEEL |
 | `fs:read` | read files (needs a path grant) | STEEL |
@@ -152,13 +153,13 @@ A grant is `(agent_id, capability, pattern)`, loaded from `~/.openjarvis/steel_p
 
 ### 3.3 Sensors and the speaker
 
-`sensor:camera`, `sensor:microphone` and, since Phase 5a, `audio:play` (the speaker: what is played can be overheard) can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
+`sensor:camera`, `sensor:microphone`, since Phase 5a `audio:play` (the speaker: what is played can be overheard) and since Phase 5c `sensor:microphone_always_on` can never be covered by a wildcard capability (none of the wildcards a grant may use matches them), and never by a resource pattern of `*`. Each needs a grant that names the capability exactly **and** one exact tool name:
 
 ```json
 {"capability": "sensor:camera", "pattern": "camera_look"}
 ```
 
-`sensor:*`, `audio:*`, a bare `*`, and a sensor or `audio:play` grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1); the camera's is `{"capability": "sensor:camera", "pattern": "camera_look"}` for the agent `eyes` (section 7.2); the speaker's is `{"capability": "audio:play", "pattern": "speak"}` for the agent `voice` (section 7.4).
+`sensor:*`, `audio:*`, a bare `*`, and a sensor or `audio:play` grant with pattern `*`, are rejected when the file is loaded (the whole file is then refused). The microphone's grant is `{"capability": "sensor:microphone", "pattern": "microphone_listen"}` for the agent `voice` (section 7.1); the camera's is `{"capability": "sensor:camera", "pattern": "camera_look"}` for the agent `eyes` (section 7.2); the speaker's is `{"capability": "audio:play", "pattern": "speak"}` for the agent `voice` (section 7.4); the always-on microphone's is `{"capability": "sensor:microphone_always_on", "pattern": "wake_listen"}` for the agent `jarvis` (section 7.5).
 
 ### 3.4 Paths (`fs:read`, `fs:write`)
 
@@ -352,6 +353,29 @@ Several agents go in the same `agents` list (for example `chat` and `eyes` toget
 A grant is necessary, not sufficient: the tool also refuses tool-data blocks, camera text and anything the injection scanner flags, needs a terminal for the `▶ SPEAKING` line, and needs the engine to run without network (docs/SPEAK.md section 6). The policy cannot decide who is in the room to hear it. The `text` argument comes from the chat model's reply today; the tool treats it as untrusted for that reason (it is cleaned, redacted and capped). The tests are listed in docs/SPEAK.md section 10 (they are not repeated in section 8).
 
 **Starting the engine early is not a tool call (Phase 5b), and keeping it loaded is not one either (Phase 5b-2).** Before it asks the model, `steel chat --speak` may start the Piper engine for the voice the reply will probably need, and the engine then stays running for the session, replaced when a reply is cut or the voice changes (docs/SPEAK.md section 6). Starting or replacing it plays nothing, opens no device and gives the engine no text, so it does not go through the executor and writes no log line; the text of a reply reaches it only inside `Speak.execute`, after the policy allowed the call. It is done only if `policy.preview("voice", "audio:play", "speak")` allows it (the same read-only question the slash banner and `steel speak check` ask), and not after a denial in the session. Every reply is still spoken only through `build_executor`, which checks and logs the grant as before. Removing the grant mid-session takes effect at the next `steel chat`, as for every other grant (the file is read when the chat starts).
+
+### 7.5 The always-on wake-word tool and its grants (Phase 5c)
+
+`steel/jarvis/listen.py` defines `wake_listen`. It declares exactly one capability, `sensor:microphone_always_on`, takes no arguments and returns a status word ("woke", "muted", "quit", a limit, an error) and the highest score as a number, never audio or text. It is built only by `get_wake_tool` (`steel/tools/__init__.py`; a test checks nothing else constructs it) and run only through `build_executor` as the agent `jarvis`, by `steel jarvis` and the owner's `scripts/jarvis_check.py`. Nothing is registered with the OpenJarvis `ToolRegistry`. A grant is necessary, not sufficient: the tool also needs the always-on consent file (`steel jarvis consent`; the push-to-talk consent does not count), the model files with their pinned SHA-256, the foreground of a terminal, and both indicators shown (the terminal line and the guard's window) before it opens the microphone (docs/JARVIS.md section 3).
+
+After a wake word, the loop records the request with `microphone_listen` and speaks with `speak`, **each with its own grant for the agent `jarvis`**: a grant for `voice` does not count. Example, written **by hand** (mode 600; STEEL never writes it), also printed by `steel jarvis check` while a grant is missing:
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "jarvis",
+      "grants": [
+        {"capability": "sensor:microphone_always_on", "pattern": "wake_listen"},
+        {"capability": "sensor:microphone",           "pattern": "microphone_listen"},
+        {"capability": "audio:play",                  "pattern": "speak"}
+      ]
+    }
+  ]
+}
+```
+
+Without the `speak` grant the loop prints its answers and stays silent. Each tool call writes one names-only line to the audit log (several per wake word). The policy cannot decide who is in the room: everyone near the computer is heard by the wake-word model while the loop runs (docs/JARVIS.md section 3e). The tests are listed in docs/JARVIS.md section 16 (they are not repeated in section 8).
 
 ## 8. Evidence
 

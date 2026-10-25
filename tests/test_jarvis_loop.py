@@ -10,8 +10,11 @@ import contextlib
 import io
 import json
 import os
+import signal
 import socket
 import tempfile
+import threading
+import time
 from typing import Any
 from unittest import mock
 
@@ -539,21 +542,43 @@ class FailureTest(LoopCase):
         self.assertEqual(self.sources[0].closed, 1)
 
     def test_ctrl_c_while_listening_closes_the_microphone(self) -> None:
-        def interrupting(seconds: float) -> FakeWakeSource:
-            source = FakeWakeSource([QUIET] * 3)
-            self.sources.append(source)
+        # The tool listens in the executor's worker thread; Ctrl-C reaches the
+        # main thread, which must cancel the tool, and that closes the source.
+        closed = threading.Event()
+
+        class Interrupting(FakeWakeSource):
+            def read_frame(self) -> bytes:
+                frame = super().read_frame()
+                if self.read == 2:
+                    # What Ctrl-C does: SIGINT to the main thread, which is
+                    # waiting for this tool's result.
+                    signal.pthread_kill(threading.main_thread().ident, signal.SIGINT)
+                    closed.wait(5)  # a blocked read, until the source is closed
+                    return b""
+                return frame
+
+            def close(self) -> None:
+                super().close()
+                closed.set()
+
+        sources: list[FakeWakeSource] = []
+
+        def wake_source(seconds: float) -> FakeWakeSource:
+            source = Interrupting([QUIET] * 50)
+            sources.append(source)
             return source
 
-        with mock.patch.object(jarvis_commands, "build_executor", create=True):
-            pass
-        self.listening([QUIET] * 3)
-        with mock.patch(
-            "steel.jarvis.loop.JarvisLoop._listen", side_effect=KeyboardInterrupt
-        ):
-            status, out = self.run_loop()
+        started = time.monotonic()
+        status, out = self.run_loop(wake_source=wake_source)
+        self.assertLess(time.monotonic() - started, 3)  # closed at once, not timed out
         self.assertEqual(status, 0)
         self.assertIn("Stopped. The microphone is closed.", out)
+        (source,) = sources
+        self.assertTrue(closed.is_set())
+        self.assertGreaterEqual(source.closed, 1)  # cancel() and the tool both close
+        self.assertLess(source.read, 50)  # it stopped listening at once
         self.assertTrue(self.guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
 
 
 class WholeSessionTest(LoopCase):

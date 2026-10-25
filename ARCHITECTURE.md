@@ -212,6 +212,42 @@ sequenceDiagram
 | `scripts/latency_check.py` | The owner's measurement: cold and warm prompts through `open_session`, Ollama's numbers, `ollama ps` PROCESSOR |
 | `docs/LATENCY.md` | The measurement plan (written first), findings (GPU, streaming, Piper), the fixes and their tests |
 
+### Phase 5c: the Jarvis loop, a foreground wake word (docs/JARVIS.md)
+
+```mermaid
+flowchart LR
+    T[terminal: steel jarvis, foreground only] --> PF[preflight: always-on consent, voice consent, model SHA-256, arecord + setpriv, grants for agent jarvis]
+    PF --> GD["guard: python -I -m steel.jarvis.guard (own process and session): red window + watchdog"]
+    PF --> E[build_executor, agent jarvis]
+    E -->|sensor:microphone_always_on, exact grant for wake_listen| W[wake_listen]
+    W --> I[terminal line AND guard SHOWN = ListeningShown proof]
+    I --> A["setpriv --pdeathsig KILL arecord: 80 ms frames"]
+    A --> K[openWakeWord port on onnxruntime: fixed RAM buffers, zeroed]
+    K -->|woke: microphone closed| R[microphone_listen: the request, REC line, voice consent]
+    R --> C[countdown, Esc cancels] --> S[ChatSession.ask, not remembered unless --remember-voice]
+    S --> SP[speak as agent jarvis] --> EG[echo gate: player exited + 0.5 s] --> W
+    GD -.kills a microphone without the window, or when heartbeats stop.-> A
+    ST[steel jarvis stop, another terminal] -.SIGKILL via pidfile.-> A
+```
+
+Nothing spoken is run: the transcript is plain text for the same chat session as typed lines; the loop has no slash-command handler and the model cannot call a tool. No service, daemon or autostart exists.
+
+| Module | Role |
+| --- | --- |
+| `steel/jarvis/commands.py` | `steel jarvis check` (read only), `consent`, `revoke`, `stop`, and `run_jarvis` (preflight, guard, pidfile, the tools, the speaker, cleanup on every exit) |
+| `steel/jarvis/listen.py` | `WakeListen` (`wake_listen`): consent and models again, foreground, limits, both indicators, then the microphone; frames only to the engine; a status and a score, never audio or text |
+| `steel/tools/__init__.py` (`get_wake_tool`) | The only builder of `wake_listen`; building it opens nothing and loads no model |
+| `steel/jarvis/wakeword.py` | `OpenWakeWord`: the ported openWakeWord streaming features (Apache-2.0, docs/PROVENANCE.md), three ONNX sessions loaded after `telemetry_off()`, fixed buffers (110 ms raw, 76 mel frames, 16 embeddings), `reset`/`wipe` |
+| `steel/jarvis/models.py` | The three pinned model files (size, SHA-256, release v0.5.1), `models_ready` |
+| `steel/jarvis/source.py` | `WakeSource` (listening) and `RequestSource` (the request): `arecord` on a pipe through `setpriv --pdeathsig KILL`; the listening one opens only with the `ListeningShown` proof |
+| `steel/jarvis/indicators.py`, `steel/jarvis/guard.py` | The terminal status line and the guard client; the guard process (Tk window, `/proc` check of `arecord` children, watchdog, cleanup when its input ends) |
+| `steel/jarvis/procs.py` | `/proc` helpers, the pidfile (pids with start times), `steel jarvis stop` |
+| `steel/jarvis/loop.py` | `JarvisLoop`: listen, record, countdown, ask, speak, echo pause; mute, quit, Ctrl-C, endings |
+| `steel/jarvis/echo.py` | `EchoGate`: the microphone stays closed until the player has exited plus 0.5 s |
+| `steel/jarvis/limits.py`, `steel/jarvis/config.py`, `steel/jarvis/keys.py`, `steel/jarvis/consent.py` | Session, idle and wake-rate limits; validated `STEEL_JARVIS_*` settings; single keys and the foreground check; the always-on consent and its text |
+| `scripts/wake_setup.py` | The only downloader of the model files (pinned size and SHA-256) |
+| `scripts/jarvis_check.py`, `scripts/wake_bench.py` | The owner's live check (wakes, false triggers, CPU, memory); the synthetic-audio measurement for docs/JARVIS.md 1.2 |
+
 ### Relationship to OpenJarvis
 
 STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). Since Phase 5b, for a local `OllamaEngine` and only with `STEEL_OLLAMA_KEEP_ALIVE` set, STEEL replaces that engine's private `_client` with an `httpx.Client` of its own (same address and timeout) whose transport adds `keep_alive`; it reads the private `_host`, `_timeout` and the guardrails wrapper's `_engine`, which the pin protects. The chat calls `generate`, never `stream`, because `GuardrailsEngine.stream` does not redact the output (docs/LATENCY.md section 4). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`. The slash commands reuse `SecretScanner`, `PIIScanner` and `InjectionScanner` on tool results, and the stock `ToolExecutor` through `build_executor`.
@@ -228,9 +264,9 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 - No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
-- No network server, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above). A wake word and always-on listening are **NOT IMPLEMENTED**: they are designed in docs/JARVIS.md (the foreground `steel jarvis` loop), the only always-on listening the owner allowed (2026-10-25); no background service, daemon or start at login. Spoken replies have no echo cancellation; none is needed while the microphone is push-to-talk (docs/SPEAK.md section 7).
+- No network server, no video, no motion detection and no recognising people. Voice input is push-to-talk, except the foreground `steel jarvis` loop (Phase 5c, above), the only always-on listening the owner allowed (2026-10-25); no background service, daemon or start at login. Vision is one picture per command. Spoken replies have no echo cancellation: the push-to-talk microphone is closed while a reply plays, and the Jarvis loop keeps its microphone closed until the player has exited plus 0.5 s, so barge-in (interrupting by voice) is not implemented (docs/SPEAK.md section 7, docs/JARVIS.md section 5).
 - Conversation history is not persisted.
 
 ## Planned extension points
 
-`SteelPolicy`, the first tools, push-to-talk voice, camera snapshots (Phases 2a to 3), slash commands (Phase 4), spoken replies (Phase 5a) and the latency work (Phase 5b) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.
+`SteelPolicy`, the first tools, push-to-talk voice, camera snapshots (Phases 2a to 3), slash commands (Phase 4), spoken replies (Phase 5a), the latency work (Phase 5b) and the Jarvis loop (Phase 5c, not yet run live by the owner) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.
