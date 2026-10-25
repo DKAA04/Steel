@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from speak_helpers import CHUNK, FakeKeys, FakeSink
+from speak_helpers import CHUNK, FakeKeys, FakeSink, install_voice
 from test_chat_slash import ReplyEngine
 from test_speak_core import FakePopen, _processes_with
 from test_speak_tool import SpeakCase, speak_grant
@@ -35,6 +35,7 @@ from steel.speak.config import (
     PERSISTENT_ENV,
     speak_config,
 )
+from steel.speak.player import RATES
 from steel.speak.synth import (
     FIRST_AUDIO_WAIT,
     PersistentRun,
@@ -42,6 +43,7 @@ from steel.speak.synth import (
     PiperRun,
     idle_gap,
 )
+from steel.speak.voices import VOICES, find_voice, sample_rate_of, voice_dir
 from steel.timings import SpeechTiming, model_timing, timing_line
 
 SECRET = "my bank PIN is 4711 and Mara visits on Friday"
@@ -330,6 +332,34 @@ class SettingsTest(unittest.TestCase):
         self.assertTrue(speak_config({PERSISTENT_ENV: "1"}).persistent)
         self.assertTrue(speak_config({PERSISTENT_ENV: "maybe"}).persistent)
         self.assertFalse(speak_config({PERSISTENT_ENV: "0"}).persistent)
+
+
+class SampleRateTest(unittest.TestCase):
+    def test_the_rate_comes_from_the_voices_own_config_file(self) -> None:
+        voice = find_voice("es_ES-carlfm-x_low")
+        assert voice is not None
+        with tempfile.TemporaryDirectory() as tmp:
+            home = Path(tmp)
+            install_voice(home, voice)  # zero bytes: not JSON, so the pinned rate
+            self.assertEqual(sample_rate_of(home, voice), voice.sample_rate)
+            config = voice_dir(home, voice) / voice.config.name
+            for text, expected in (
+                ('{"audio": {"sample_rate": 22050}}', 22050),
+                ('{"audio": {"sample_rate": 16000}}', 16000),
+                ('{"audio": {"sample_rate": 44100}}', voice.sample_rate),  # not allowed
+                ('{"audio": {"sample_rate": true}}', voice.sample_rate),
+                ('{"audio": {"sample_rate": "22050"}}', voice.sample_rate),
+                ('{"audio": 3}', voice.sample_rate),
+                ("[]", voice.sample_rate),
+            ):
+                config.write_text(text)
+                self.assertEqual(sample_rate_of(home, voice), expected, text)
+            config.unlink()
+            self.assertEqual(sample_rate_of(home, voice), voice.sample_rate)
+
+    def test_the_pinned_rates_are_the_ones_the_player_accepts(self) -> None:
+        for voice in VOICES:
+            self.assertIn(voice.sample_rate, RATES, voice.name)
 
 
 class CheckOutputTest(SpeakCase):

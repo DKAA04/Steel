@@ -9,6 +9,7 @@ time a voice is used only if its files are there with the pinned sizes, and
 from __future__ import annotations
 
 import hashlib
+import json
 import os
 import stat
 from dataclasses import dataclass
@@ -166,3 +167,21 @@ def voice_for(home: Path, language: str) -> Voice | None:
         (v for v in VOICES if v.language == language), key=lambda v: v.default
     )
     return next((v for v in candidates if installed(home, v)), None)
+
+
+def sample_rate_of(home: Path, voice: Voice) -> int:
+    """The voice's sample rate from its own ``.onnx.json`` (``audio.sample_rate``).
+
+    The player must be told the rate the voice really has, or the speech plays
+    too fast or too slow. The pinned value is the fallback if the file cannot be
+    read or holds a rate ``aplay`` is not allowed to be given.
+    """
+    from steel.speak.player import RATES
+
+    try:
+        with open(voice_dir(home, voice) / voice.config.name, encoding="utf-8") as f:
+            rate = json.load(f)["audio"]["sample_rate"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return voice.sample_rate
+    ok = isinstance(rate, int) and not isinstance(rate, bool) and rate in RATES
+    return rate if ok else voice.sample_rate

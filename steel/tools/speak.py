@@ -25,7 +25,7 @@ from steel.speak.playback import play
 from steel.speak.player import AudioSink, PlayerUnavailable
 from steel.speak.synth import EngineUnavailable, Synthesizer
 from steel.speak.text import prepare_speech
-from steel.speak.voices import LANGUAGE_NAMES, voice_dir, voice_for
+from steel.speak.voices import LANGUAGE_NAMES, sample_rate_of, voice_dir, voice_for
 
 SPEAK_TOOL = "speak"
 MAX_INPUT_CHARS = 8000  # longer replies are cut to the spoken limit anyway
@@ -152,7 +152,7 @@ class Speak(BaseTool):
                     run,
                     self._open_sink(),
                     self._indicator,
-                    rate=voice.sample_rate,
+                    rate=sample_rate_of(self._home, voice),
                     max_seconds=self._config.max_audio_seconds,
                     stop_requested=self._keys.stop_requested,
                     cancelled=self._cancel.is_set,
