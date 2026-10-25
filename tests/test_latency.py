@@ -8,18 +8,33 @@ from __future__ import annotations
 
 import contextlib
 import io
+import json
+import os
+import socket
+import threading
 from typing import Any
 from unittest import mock
 
+import httpx
 import test_steel as base
+from openjarvis.engine.ollama import OllamaEngine
 from speak_helpers import FakeRun
 from test_chat_slash import ReplyEngine
 from test_speak_tool import SpeakCase, speak_grant
 
-from steel.chat import run_repl
-from steel.cli import main
+from steel import warm as warm_module
+from steel.chat import open_session, run_repl
+from steel.cli import _open_chat, main
+from steel.memory import SteelMemory
 from steel.speak.commands import ChatSpeaker
 from steel.timings import ModelTiming, SpeechTiming, model_timing, timing_line
+from steel.warm import (
+    KEEP_ALIVE_ENV,
+    WARMUP_TEXT,
+    install_keep_alive,
+    keep_alive_setting,
+    start_warmup,
+)
 
 USER_TEXT = "my bank PIN is 4711"
 REPLY = "Mara visits on Friday at four."
@@ -173,3 +188,202 @@ class ChatTimingsTest(SpeakCase):
         ):
             self.assertEqual(main(["chat", "--voice", "--timings"]), 0)
         self.assertTrue(voice.call_args.kwargs["timings"])
+
+
+SECRET_KEY = "sk-abcdefghijklmnopqrstuvwxyz0123456789ABCD"
+
+
+class OllamaFake:
+    """Stands in for the Ollama server behind a real OpenJarvis OllamaEngine.
+
+    Requests go to an httpx.MockTransport, never to a socket. ``gate`` lets a
+    test hold a request open, like a model that is still loading.
+    """
+
+    def __init__(self) -> None:
+        self.bodies: list[dict[str, Any]] = []
+        self.gate = threading.Event()
+        self.gate.set()
+
+    def handler(self, request: httpx.Request) -> httpx.Response:
+        body = json.loads(request.content)
+        self.bodies.append({"path": request.url.path, **body})
+        self.gate.wait(10)
+        system = body["messages"][0]["content"] if body["messages"] else ""
+        content = "[]" if system == base.EXTRACTOR_PROMPT else "Noted."
+        return httpx.Response(
+            200, json={"message": {"content": content}, "done": True, **OLLAMA}
+        )
+
+    def transport(self) -> httpx.MockTransport:
+        return httpx.MockTransport(self.handler)
+
+    def engine(self, host: str = "http://127.0.0.1:11434") -> OllamaEngine:
+        engine = OllamaEngine(host)
+        engine._client = httpx.Client(base_url=host, transport=self.transport())
+        return engine
+
+
+@contextlib.contextmanager
+def no_network() -> Any:
+    def forbidden(*_: Any, **__: Any) -> Any:
+        raise AssertionError("a real network connection was attempted")
+
+    with (
+        mock.patch.object(socket.socket, "connect", forbidden),
+        mock.patch.object(socket.socket, "connect_ex", forbidden),
+        mock.patch.object(socket, "create_connection", forbidden),
+        mock.patch.object(socket, "getaddrinfo", forbidden),
+    ):
+        yield
+
+
+class WarmUpTest(base.HomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.ollama = OllamaFake()
+        os.environ.pop(KEEP_ALIVE_ENV, None)
+
+    def test_the_warm_up_sends_one_fixed_word_and_no_user_text(self) -> None:
+        SteelMemory(self.home).remember("My bank PIN is 4711.")
+        session = self.session(self.ollama.engine())  # type: ignore[arg-type]
+        self.addCleanup(session.close, 5)
+        with no_network():
+            thread = start_warmup(session.engine, session.model)
+            assert thread is not None
+            thread.join(5)
+        (body,) = self.ollama.bodies
+        self.assertEqual(body["path"], "/api/chat")
+        self.assertEqual(body["messages"], [{"role": "user", "content": WARMUP_TEXT}])
+        self.assertEqual(body["options"]["num_predict"], 1)
+        self.assertNotIn("4711", json.dumps(body))
+        self.assertNotIn("keep_alive", body)  # unset: Ollama's default applies
+
+    def test_the_first_prompt_is_not_held_up_by_the_warm_up(self) -> None:
+        self.ollama.gate.clear()  # the model is still "loading"
+        engine = self.ollama.engine()
+        with (
+            mock.patch(
+                "steel.chat.open_session",
+                side_effect=lambda config, home: open_session(
+                    config, home, engine=engine
+                ),
+            ),
+            no_network(),
+        ):
+            session = _open_chat(self.config(), self.home)
+        self.addCleanup(session.close, 5)
+        (warm,) = [t for t in threading.enumerate() if t.name == "steel-warmup"]
+        self.assertTrue(warm.is_alive())  # returned while the request is open
+        self.ollama.gate.set()
+        warm.join(5)
+        self.assertFalse(warm.is_alive())
+
+    def test_a_remote_or_non_ollama_engine_gets_no_warm_up_and_no_keep_alive(
+        self,
+    ) -> None:
+        for engine in (
+            self.ollama.engine("http://192.0.2.10:11434"),
+            self.ollama.engine("http://ollama.example:11434"),
+            base.FakeEngine(),
+        ):
+            with no_network():
+                self.assertIsNone(start_warmup(engine, "fake"))
+                self.assertFalse(install_keep_alive(engine, "30m"))
+        self.assertEqual(self.ollama.bodies, [])
+
+    def test_a_failed_warm_up_is_silent_and_changes_nothing(self) -> None:
+        engine = OllamaEngine("http://127.0.0.1:11434")
+        engine._client = httpx.Client(
+            base_url="http://127.0.0.1:11434",
+            transport=httpx.MockTransport(lambda r: httpx.Response(500)),
+        )
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err), no_network():
+            thread = start_warmup(engine, "fake")
+            assert thread is not None
+            thread.join(5)
+        self.assertEqual(err.getvalue(), "")
+
+
+class KeepAliveTest(base.HomeTestCase):
+    def setUp(self) -> None:
+        super().setUp()
+        self.ollama = OllamaFake()
+        os.environ.pop(KEEP_ALIVE_ENV, None)
+
+    def chat_bodies(self, env: dict[str, str]) -> list[dict[str, Any]]:
+        engine = self.ollama.engine()
+        with (
+            mock.patch.dict(os.environ, env),
+            mock.patch.object(
+                warm_module.httpx, "HTTPTransport", self.ollama.transport
+            ),
+            no_network(),
+        ):
+            session = self.session(engine)  # type: ignore[arg-type]
+            session.ask("hello there")
+            session.close(5)
+        return self.ollama.bodies
+
+    def test_with_the_setting_every_request_carries_the_keep_alive(self) -> None:
+        bodies = self.chat_bodies({KEEP_ALIVE_ENV: "30m"})
+        self.assertGreaterEqual(len(bodies), 2)  # the chat and the extraction
+        self.assertEqual({b["keep_alive"] for b in bodies}, {"30m"})
+        self.assertEqual(bodies[0]["messages"][-1]["content"], "hello there")
+
+    def test_without_the_setting_requests_are_left_alone(self) -> None:
+        bodies = self.chat_bodies({})
+        self.assertTrue(bodies)
+        self.assertFalse(any("keep_alive" in b for b in bodies))
+
+    def test_only_a_duration_from_one_second_to_a_day_is_accepted(self) -> None:
+        for good in ("30m", "1h", "90s", "24h", "1440m"):
+            self.assertEqual(keep_alive_setting({KEEP_ALIVE_ENV: good}), (good, ""))
+        for bad in ("forever", "-1", "0", "30", "25h", "1.5h", "30 m", "0m", "5d"):
+            value, problem = keep_alive_setting({KEEP_ALIVE_ENV: bad})
+            self.assertIsNone(value, bad)
+            self.assertIn("Ollama's own keep-alive applies", problem)
+        self.assertEqual(keep_alive_setting({}), (None, ""))
+
+    def test_a_bad_setting_is_reported_at_start_and_the_default_kept(self) -> None:
+        err = io.StringIO()
+        with (
+            mock.patch.dict(os.environ, {KEEP_ALIVE_ENV: "forever"}),
+            mock.patch("steel.chat.open_session"),
+            mock.patch("steel.warm.start_warmup"),
+            contextlib.redirect_stderr(err),
+        ):
+            _open_chat(self.config(), self.home)
+        self.assertIn(
+            "STEEL_OLLAMA_KEEP_ALIVE='forever' is not a duration", err.getvalue()
+        )
+
+    def test_the_keep_alive_client_never_uses_a_proxy(self) -> None:
+        engine = self.ollama.engine()
+        with mock.patch.dict(os.environ, {"HTTP_PROXY": "http://proxy.invalid:3128"}):
+            self.assertTrue(
+                install_keep_alive(engine, "30m", inner=self.ollama.transport())
+            )
+        self.assertFalse(engine._client._trust_env)
+
+
+class NoStreamingTest(base.HomeTestCase):
+    def test_the_chat_never_streams_so_the_guardrails_redact_the_reply(self) -> None:
+        class Leaky(base.FakeEngine):
+            def generate(self, messages: Any, *, model: str, **kw: Any) -> Any:
+                answer = super().generate(messages, model=model, **kw)
+                if messages[0].content != base.EXTRACTOR_PROMPT:
+                    answer["content"] = f"Your key is {SECRET_KEY}."
+                return answer
+
+            async def stream(self, *_: Any, **__: Any) -> Any:
+                raise AssertionError("the chat must not stream (docs/LATENCY.md 4)")
+                yield ""
+
+        session = self.session(Leaky())
+        self.addCleanup(session.close, 5)
+        reply = session.ask("what is my key?")
+        self.assertNotIn(SECRET_KEY, reply)
+        self.assertIn("[REDACTED:", reply)
+        self.assertNotIn(SECRET_KEY, session.history[-1].content)

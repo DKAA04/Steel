@@ -223,6 +223,10 @@ def open_session(
     model = model or config.intelligence.default_model
     if not model:
         raise RuntimeError("No model configured ([intelligence] default_model).")
+    # $STEEL_OLLAMA_KEEP_ALIVE on every request, for a local Ollama only.
+    from steel.warm import install_keep_alive, keep_alive_setting
+
+    install_keep_alive(engine, keep_alive_setting()[0])
 
     # OpenJarvis guardrails: redact secrets/PII in model input and output.
     # Its audit logger writes pattern names (not text) to audit.db.

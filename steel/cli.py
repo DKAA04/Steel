@@ -26,8 +26,12 @@ import argparse
 import os
 import sys
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from steel.pin import PinError, check_openjarvis_pin
+
+if TYPE_CHECKING:
+    from steel.chat import ChatSession
 
 
 def _prepare() -> None:
@@ -247,6 +251,19 @@ def _tool_call(home: Path, name: str, agent_id: str, arguments: str) -> int:
         return 0
     print(f"Not run: {result.content}", file=sys.stderr)
     return 1
+
+
+def _open_chat(config: Any, home: Path) -> ChatSession:
+    """open_session, then load the model in the background (docs/LATENCY.md 8)."""
+    from steel.chat import open_session
+    from steel.warm import keep_alive_setting, start_warmup
+
+    _value, problem = keep_alive_setting()
+    if problem:
+        print(f"steel: {problem}", file=sys.stderr)
+    session = open_session(config, home)
+    start_warmup(session.engine, session.model)  # never waits
+    return session
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -494,17 +511,16 @@ def main(argv: list[str] | None = None) -> int:
             memory=memory,
         )
     elif args.command == "chat" and args.voice:
-        from steel.chat import open_session
         from steel.voice import commands as voice_commands
         from steel.voice.consent import has_consent
 
         if not has_consent(home):  # before loading a model: nothing to wait for
             return voice_commands.no_consent()
         return voice_commands.run_voice_repl(
-            open_session(config, home), home, speak=args.speak, timings=args.timings
+            _open_chat(config, home), home, speak=args.speak, timings=args.timings
         )
     elif args.command == "chat":
-        from steel.chat import open_session, run_repl
+        from steel.chat import run_repl
         from steel.slash import build_slash
         from steel.voice.terminal import Terminal
 
@@ -513,7 +529,7 @@ def main(argv: list[str] | None = None) -> int:
             from steel.speak.commands import ChatSpeaker
 
             speaker = ChatSpeaker(home)
-        session = open_session(config, home)
+        session = _open_chat(config, home)
         run_repl(
             session,
             build_slash(home, session, Terminal()),
