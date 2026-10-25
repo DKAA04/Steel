@@ -59,15 +59,41 @@ class LocalWhisperTest(unittest.TestCase):
         self.loaded: list[Path] = []
 
     def make(
-        self, languages: tuple[str, ...] = (), speech: bool = True
+        self, languages: tuple[str, ...] = (), speech: bool = True, hint: str = ""
     ) -> LocalWhisper:
         def load(path: Path) -> FakeModel:
             self.loaded.append(path)
             return self.model
 
         return LocalWhisper(
-            self.dir, languages, load_model=load, find_speech=lambda _s: speech
+            self.dir,
+            languages,
+            hint=hint,
+            load_model=load,
+            find_speech=lambda _s: speech,
         )
+
+    def test_the_vocabulary_hint_reaches_the_model_as_its_initial_prompt(
+        self,
+    ) -> None:
+        self.make(hint="STEEL, Ada").transcribe(pcm(100, -100))
+        (call,) = self.model.transcribe_calls
+        self.assertEqual(call["initial_prompt"], "STEEL, Ada")
+
+    def test_without_a_hint_no_initial_prompt_is_passed(self) -> None:
+        self.make().transcribe(pcm(100, -100))
+        self.assertIsNone(self.model.transcribe_calls[0]["initial_prompt"])
+
+    def test_the_microphone_tool_gives_the_configured_hint_to_whisper(self) -> None:
+        from steel.tools import get_microphone_tool
+        from steel.voice.config import VoiceConfig
+
+        home = Path(self._tmp.name) / "home"
+        home.mkdir()
+        tool = get_microphone_tool(
+            home, config=VoiceConfig(hint="STEEL, Ada"), push_to_talk=object()
+        )
+        self.assertEqual(tool._transcriber._hint, "STEEL, Ada")
 
     def test_it_returns_the_joined_text_and_the_language(self) -> None:
         result = self.make().transcribe(pcm(100, -100, 200))

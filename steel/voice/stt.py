@@ -65,11 +65,13 @@ class LocalWhisper:
         directory: Path,
         languages: tuple[str, ...] = (),
         *,
+        hint: str = "",
         load_model: Callable[[Path], Any] = _load_whisper,
         find_speech: Callable[[Any], bool] = _find_speech,
     ) -> None:
         self._directory = directory
         self._languages = languages
+        self._hint = hint
         self._load_model = load_model
         self._find_speech = find_speech
         self._model: Any = None
@@ -112,6 +114,9 @@ class LocalWhisper:
                 beam_size=1,
                 vad_filter=True,
                 condition_on_previous_text=False,
+                # Spelling help for names ("STEEL", not "Steele"). Whisper can
+                # echo it back on near-silence; the VAD gate above skips silence.
+                initial_prompt=self._hint or None,
             )
             text = " ".join(s.text.strip() for s in segments).strip()
             return Transcript(text, getattr(info, "language", None))

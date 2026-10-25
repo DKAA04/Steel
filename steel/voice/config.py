@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 import re
+import unicodedata
 from collections.abc import Mapping
 from dataclasses import dataclass
 
@@ -16,6 +17,10 @@ DEFAULT_MAX_SECONDS = 30.0
 MAX_SECONDS_CAP = 120.0
 DEFAULT_LANGUAGES = ("en", "es", "it")
 DEFAULT_MODEL = "small"
+# Words Whisper should expect (its initial prompt), so "STEEL" is not heard as
+# "Steele". The owner adds names in $STEEL_VOICE_HINT; none is written in the code.
+DEFAULT_HINT = "STEEL"
+MAX_HINT_CHARS = 200
 
 _MODEL_RE = re.compile(r"[a-z0-9][a-z0-9._-]{0,31}")
 _LANGUAGE_RE = re.compile(r"[a-z]{2,3}")
@@ -35,6 +40,7 @@ class VoiceConfig:
     # () = detect among all languages, one code = forced, several = detect among those.
     languages: tuple[str, ...] = DEFAULT_LANGUAGES
     device: str = "default"  # ALSA device; "default" is PipeWire on this machine
+    hint: str = DEFAULT_HINT  # Whisper's initial prompt (vocabulary, not orders)
 
 
 def _number(
@@ -47,6 +53,16 @@ def _number(
     if not low < value < float("inf"):  # also rejects nan and inf
         return default
     return min(value, high)
+
+
+def _hint(raw: str) -> str:
+    """The vocabulary hint: 1-200 printable characters, always with "STEEL"."""
+    raw = raw.strip()
+    if not 0 < len(raw) <= MAX_HINT_CHARS or any(
+        unicodedata.category(ch) in ("Cc", "Cf") for ch in raw
+    ):
+        return DEFAULT_HINT
+    return raw if DEFAULT_HINT in raw else f"{DEFAULT_HINT}, {raw}"
 
 
 def voice_config(env: Mapping[str, str] | None = None) -> VoiceConfig:
@@ -80,4 +96,5 @@ def voice_config(env: Mapping[str, str] | None = None) -> VoiceConfig:
         model=model if _MODEL_RE.fullmatch(model) else base.model,
         languages=languages,
         device=device if _DEVICE_RE.fullmatch(device) else base.device,
+        hint=_hint(env.get("STEEL_VOICE_HINT", "")),
     )

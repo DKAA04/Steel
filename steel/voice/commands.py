@@ -110,6 +110,7 @@ def voice_check(home: Path, *, pcm_list: Path = PCM_LIST) -> int:
         print(f"speech model: {config.model} MISSING (expected in {home / MODELS_DIR})")
     languages = ", ".join(config.languages) or "auto (all languages)"
     print(f"languages: {languages}; at most {config.max_seconds:g} s per recording")
+    print(f'vocabulary hint: "{config.hint}" (set STEEL_VOICE_HINT to add names)')
 
     speaker = find_speaker()
     print(

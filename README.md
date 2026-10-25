@@ -119,7 +119,7 @@ Setup (nothing happens until you do all of it):
    `{"agents": [{"agent_id": "voice", "grants": [{"capability": "sensor:microphone", "pattern": "microphone_listen"}]}]}`
 4. `steel voice check`, then `steel voice listen`. `python scripts/voice_check.py` is a live test (5 s from your real microphone, in a scratch directory that is deleted afterwards).
 
-Spoken replies (`--speak`) need a local `espeak-ng`, which is **not installed** here and has only been tested with a fake. Settings: `STEEL_VOICE_MAX_SECONDS` (default 30, capped at 120), `STEEL_VOICE_SILENCE_SECONDS`, `STEEL_VOICE_SILENCE_RMS`, `STEEL_VOICE_MODEL` (`small`, or `base` for speed), `STEEL_VOICE_LANGUAGE` (`en,es,it` by default, a single code, or `auto`), `STEEL_VOICE_DEVICE`. **What was and was not tested, accuracy in Spanish and Italian (not measured), speed, and the wake word (not implemented):** [docs/VOICE.md](docs/VOICE.md).
+Spoken replies (`--speak`) need a local `espeak-ng`, which is **not installed** here and has only been tested with a fake. Settings: `STEEL_VOICE_MAX_SECONDS` (default 30, capped at 120), `STEEL_VOICE_SILENCE_SECONDS`, `STEEL_VOICE_SILENCE_RMS`, `STEEL_VOICE_MODEL` (`small`, or `base` for speed), `STEEL_VOICE_LANGUAGE` (`en,es,it` by default, a single code, or `auto`), `STEEL_VOICE_DEVICE`, `STEEL_VOICE_HINT` (words Whisper should expect, such as your name: `STEEL_VOICE_HINT="STEEL, Ada"`; default `STEEL`, which is always kept). **What was and was not tested, accuracy in Spanish and Italian (not measured), speed, and the wake word (not implemented):** [docs/VOICE.md](docs/VOICE.md).
 
 ### Vision (Phase 3, optional, local)
 

@@ -63,7 +63,9 @@ def get_microphone_tool(
     if transcriber is None:
         from steel.voice.stt import LocalWhisper, model_dir
 
-        transcriber = LocalWhisper(model_dir(home, config.model), config.languages)
+        transcriber = LocalWhisper(
+            model_dir(home, config.model), config.languages, hint=config.hint
+        )
     if push_to_talk is None:
         from steel.voice.terminal import Terminal
 

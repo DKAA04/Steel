@@ -185,6 +185,7 @@ def run(
                     LocalWhisper(
                         model_dir(models_home, name),
                         languages,
+                        hint=base.hint,
                         **(whisper_options or {}),
                     ),
                 )

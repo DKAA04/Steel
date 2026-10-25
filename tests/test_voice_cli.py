@@ -103,6 +103,11 @@ class VoiceCheckTest(CliCase):
         stack.enter_context(mock.patch.object(commands, "PCM_LIST", listing))
         return stack
 
+    def test_check_shows_the_vocabulary_hint(self) -> None:
+        with mock.patch.dict("os.environ", {"STEEL_VOICE_HINT": "STEEL, Ada"}):
+            text = self.check(1)
+        self.assertIn('vocabulary hint: "STEEL, Ada"', text)
+
     def check(self, expect: int) -> str:
         out = io.StringIO()
         with contextlib.redirect_stdout(out):

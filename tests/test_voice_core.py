@@ -52,6 +52,23 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(config.languages, ("en", "es", "it"))
         self.assertEqual(config.model, "small")
 
+    def test_the_vocabulary_hint_defaults_to_steel_and_comes_from_a_setting(
+        self,
+    ) -> None:
+        # "Ada" is a synthetic name: no personal data is written into the code.
+        self.assertEqual(voice_config({}).hint, "STEEL")
+        self.assertEqual(
+            voice_config({"STEEL_VOICE_HINT": "STEEL, Ada"}).hint, "STEEL, Ada"
+        )
+        # The point of the hint is the word STEEL, so it is kept when missing.
+        self.assertEqual(voice_config({"STEEL_VOICE_HINT": " Ada "}).hint, "STEEL, Ada")
+
+    def test_a_bad_vocabulary_hint_falls_back_to_steel(self) -> None:
+        for bad in ("", "   ", "Ada\x1b[2J", "Ada\nSTEEL", "x" * 201):
+            self.assertEqual(
+                voice_config({"STEEL_VOICE_HINT": bad}).hint, "STEEL", repr(bad)
+            )
+
     def test_the_maximum_length_is_configurable_but_capped(self) -> None:
         self.assertEqual(
             voice_config({"STEEL_VOICE_MAX_SECONDS": "12"}).max_seconds, 12.0
