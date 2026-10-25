@@ -79,8 +79,10 @@ class ScriptTest(base.HomeTestCase):
         before = self.real_home_listing()
         self.assertEqual(self.run_script(), 0, self.output())
         out = self.output()
-        self.assertIn("[qwen2.5vl:3b] description: A desk with a mug.", out)
-        self.assertRegex(out, r"\[qwen2.5vl:3b\] \d+\.\d s")
+        # The default model is the chat model, qwen3.5:2b.
+        self.assertIn("[qwen3.5:2b] description: A table, a red cup.", out)
+        self.assertNotIn("qwen2.5vl:3b", out)
+        self.assertRegex(out, r"\[qwen3.5:2b\] \d+\.\d s")
         self.assertIn("camera open for", out)
         self.assertIn("448x336", out)
         self.assertIn("whole call", out)
@@ -141,9 +143,7 @@ class ScriptTest(base.HomeTestCase):
 
     def test_the_question_reaches_the_model(self) -> None:
         self.run_script("--question", "is the desk tidy?")
-        self.assertEqual(
-            self.describers["qwen2.5vl:3b"].calls[0][1], "is the desk tidy?"
-        )
+        self.assertEqual(self.describers["qwen3.5:2b"].calls[0][1], "is the desk tidy?")
 
     def test_anything_but_yes_takes_no_picture_and_makes_no_scratch(self) -> None:
         for answer in ("no", "", "y"):

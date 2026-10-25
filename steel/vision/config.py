@@ -11,7 +11,11 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass
 
-DEFAULT_MODEL = "qwen2.5vl:3b"
+# The chat model, already in RAM for `steel chat`. The owner measured 23 to 26 s
+# a look with it, and about 100 s with qwen2.5vl:3b (STEEL_VISION_MODEL selects it).
+DEFAULT_MODEL = "qwen3.5:2b"
+# Seconds a look took on the owner's CPU, for `steel vision check` (not a promise).
+MEASURED_LOOK = {"qwen3.5:2b": "about 25 s", "qwen2.5vl:3b": "about 100 s"}
 DEFAULT_DEVICE = "/dev/video0"
 MAX_QUESTION_CHARS = 200
 MAX_DESCRIPTION_CHARS = 1500
@@ -45,7 +49,7 @@ class VisionConfig:
     warmup_frames: int = DEFAULT_WARMUP_FRAMES  # dropped while the exposure settles
     start_wait_seconds: float = 60.0  # how long ``steel look`` waits for Enter
     capture_timeout: float = 10.0  # ffmpeg is killed after this many seconds
-    model_timeout: float = 240.0  # the 3B model takes 100 to 120 s here
+    model_timeout: float = 240.0  # enough for qwen2.5vl:3b (100 to 120 s here)
     num_ctx: int = 4096  # context window asked of Ollama (its default here is 16384)
     max_tokens: int = 300
 

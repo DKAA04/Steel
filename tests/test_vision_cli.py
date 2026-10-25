@@ -152,7 +152,7 @@ class VisionCheckTest(CliCase):
         for expected in (
             "video devices: none found",
             "ffmpeg NOT found",
-            "qwen2.5vl:3b NOT installed",
+            "qwen3.5:2b NOT installed",
             "consent: MISSING",
             "NOT granted to agent 'eyes'",
             '"agent_id": "eyes"',
@@ -212,7 +212,7 @@ class VisionCheckTest(CliCase):
         self.allow_everything()
         cases = {
             "ffmpeg NOT found": {"ffmpeg": False},
-            "NOT installed": {"models": ["qwen3.5:2b"]},
+            "NOT installed": {"models": ["qwen2.5vl:3b"]},
             "video devices: none found": {"cameras": False},
         }
         for expected, options in cases.items():
@@ -260,17 +260,29 @@ class VisionCheckTest(CliCase):
 
         def record(host: str) -> list[str]:
             asked.append(host)
-            return ["qwen2.5vl:3b"]
+            return ["qwen3.5:2b"]
 
         code, _ = self.check(models=record)
         self.assertEqual((code, asked), (0, ["http://127.0.0.1:9999"]))
 
     def test_the_default_model_can_be_changed_by_the_environment(self) -> None:
         self.allow_everything()
-        with mock.patch.dict("os.environ", {"STEEL_VISION_MODEL": "qwen3.5:2b"}):
+        with mock.patch.dict("os.environ", {"STEEL_VISION_MODEL": "qwen2.5vl:3b"}):
             code, text = self.check()
         self.assertEqual(code, 0, text)
-        self.assertIn("qwen3.5:2b installed", text)
+        self.assertIn("qwen2.5vl:3b installed", text)
+
+    def test_check_states_the_measured_time_of_the_model_in_use(self) -> None:
+        self.allow_everything()
+        _, text = self.check()
+        self.assertIn("vision model: qwen3.5:2b installed", text)
+        self.assertIn("about 25 s a look with qwen3.5:2b", text)
+        with mock.patch.dict("os.environ", {"STEEL_VISION_MODEL": "qwen2.5vl:3b"}):
+            _, text = self.check()
+        self.assertIn("about 100 s a look with qwen2.5vl:3b", text)
+        with mock.patch.dict("os.environ", {"STEEL_VISION_MODEL": "llava"}):
+            _, text = self.check(models=["llava:latest"])
+        self.assertIn("not measured on this computer", text)
 
     def test_cli_check_does_not_harden_the_home_or_reach_ollama(self) -> None:
         self.home.chmod(0o755)

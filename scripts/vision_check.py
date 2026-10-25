@@ -1,7 +1,7 @@
 """Live vision check: take ONE picture with the REAL camera and describe it.
 
-    python scripts/vision_check.py                      # model qwen2.5vl:3b
-    python scripts/vision_check.py --models qwen3.5:2b
+    python scripts/vision_check.py                      # model qwen3.5:2b (the default)
+    python scripts/vision_check.py --models qwen2.5vl:3b
     python scripts/vision_check.py --models qwen2.5vl:3b,qwen3.5:2b --question "is the desk tidy?"
 
 For the owner to run, in a terminal. It is not part of pytest, and no test runs
@@ -21,7 +21,9 @@ computer: Ollama must be on localhost.
 
 Time budget, measured on the author's machine (Ryzen 5 5500U, CPU only, busy) with
 SYNTHETIC images and no camera: qwen2.5vl:3b took 90 to 120 s per picture, almost
-all of it reading the image; qwen3.5:2b took 14 to 26 s. Yours will differ. Models
+all of it reading the image; qwen3.5:2b took 14 to 26 s. On the real camera the
+owner then measured 23 to 26 s with qwen3.5:2b (the default since) and about 100 s
+with qwen2.5vl:3b. Yours will differ. Models
 are loaded one after the other and Ollama keeps them in RAM for about 5 minutes:
 on 14 GiB, running both filled the swap, so if memory is tight compare them in two
 runs (and `ollama stop <model>` in between).

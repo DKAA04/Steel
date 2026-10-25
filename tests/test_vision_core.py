@@ -340,6 +340,16 @@ class ConfigTest(unittest.TestCase):
                 vision_config({"STEEL_CAMERA_DEVICE": bad}).device, DEFAULT_DEVICE, bad
             )
 
+    def test_the_default_vision_model_is_qwen3_5_2b_and_the_3b_is_selectable(
+        self,
+    ) -> None:
+        # The owner measured 23 to 26 s a look with qwen3.5:2b, ~100 s with the 3B.
+        self.assertEqual(DEFAULT_MODEL, "qwen3.5:2b")
+        self.assertEqual(vision_config({}).model, "qwen3.5:2b")
+        self.assertEqual(
+            vision_config({"STEEL_VISION_MODEL": "qwen2.5vl:3b"}).model, "qwen2.5vl:3b"
+        )
+
     def test_the_warm_up_is_about_20_frames_and_can_be_set(self) -> None:
         self.assertEqual(DEFAULT_WARMUP_FRAMES, 20)
         self.assertEqual(vision_config({}).warmup_frames, 20)

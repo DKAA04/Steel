@@ -29,6 +29,7 @@ from steel.vision.config import (
     DEFAULT_SAVE_HOURS,
     MAX_QUESTION_CHARS,
     MAX_SAVE_HOURS,
+    MEASURED_LOOK,
     vision_config,
 )
 from steel.vision.consent import (
@@ -167,9 +168,15 @@ def vision_check(
     except Exception:  # noqa: BLE001 - any failure to ask Ollama is "not ready"
         ready = False
         print("vision model: cannot be checked (is Ollama running on this computer?)")
+    speed = MEASURED_LOOK.get(config.model)
     print(
         f"picture size sent: at most {config.max_side} px on the longest side; "
-        "expect about 100 to 120 s a look with qwen2.5vl:3b on this CPU"
+        + (
+            f"expect {speed} a look with {config.model} on this CPU"
+            if speed
+            else f"the time a look takes with {config.model} was not measured on "
+            "this computer"
+        )
     )
 
     stamp = read_consent(home)

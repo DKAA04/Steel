@@ -9,7 +9,7 @@ STEEL is planned as a room-scale assistant that hears, sees and remembers. Today
 - Linux, Python 3.11–3.13
 - OpenJarvis installed at `~/.openjarvis/.venv`, from commit `108d257188cbad85f2e50209d9a61669ea4dec33` (reports version `1.0.5.dev119+g108d257`). STEEL refuses to run against any other version (see `steel/pin.py`).
 - The OpenJarvis Rust extension (`import openjarvis_rust` must work).
-- [Ollama](https://ollama.com) running locally with `qwen3.5:2b` pulled. For the optional camera: `ffmpeg` and a vision model in Ollama (`qwen2.5vl:3b` by default).
+- [Ollama](https://ollama.com) running locally with `qwen3.5:2b` pulled. For the optional camera: `ffmpeg` and a vision-capable model in Ollama (`qwen3.5:2b` by default, the same as the chat model).
 
 ## Install
 
@@ -127,13 +127,13 @@ One picture per command, never video. `steel look` prints a `● CAMERA OPEN` li
 
 Setup (nothing happens until you do all of it):
 
-1. `ffmpeg` and `ollama pull qwen2.5vl:3b` (already present on the author's machine; nothing new is installed by STEEL).
+1. `ffmpeg` and a vision-capable model in Ollama: `qwen3.5:2b` (the chat model) by default, or `ollama pull qwen2.5vl:3b` and `STEEL_VISION_MODEL=qwen2.5vl:3b` (already present on the author's machine; nothing new is installed by STEEL).
 2. `steel vision consent` (type `yes`).
 3. Write the grant **by hand** (`~/.openjarvis/steel_policy.json`, mode 600; STEEL never writes it). `steel vision check` prints the exact text:
    `{"agents": [{"agent_id": "eyes", "grants": [{"capability": "sensor:camera", "pattern": "camera_look"}]}]}`
 4. `steel vision check`, then `steel look`. `python scripts/vision_check.py` is a live test (one real picture, in a scratch directory that is deleted afterwards; it can compare models on the same picture).
 
-**Slow:** about 100 to 120 seconds a look with `qwen2.5vl:3b` on the author's CPU (measured with synthetic images; `qwen3.5:2b` took 14 to 26 s). Settings: `STEEL_CAMERA_DEVICE` (`/dev/video0` by default), `STEEL_VISION_MODEL`. **What was and was not tested, and always-on watching, motion detection and recognising people (not implemented):** [docs/VISION.md](docs/VISION.md).
+**Speed:** about 25 seconds a look with the default `qwen3.5:2b` and about 100 seconds with `qwen2.5vl:3b` on the owner's CPU (the owner's live check, a few looks). Settings: `STEEL_CAMERA_DEVICE` (`/dev/video0` by default), `STEEL_VISION_MODEL`. **What was and was not tested, and always-on watching, motion detection and recognising people (not implemented):** [docs/VISION.md](docs/VISION.md).
 
 ### Permission policy and the first tools
 
