@@ -43,6 +43,25 @@ class LatencyCheckScriptTest(unittest.TestCase):
         self.assertEqual(self.script.processor_of("", "qwen3.5:2b"), "")
         self.assertEqual(self.script.processor_of("Error: refused", "x"), "")
 
+    def test_the_context_and_the_model_size_are_read_from_ollama_ps(self) -> None:
+        for column, first, second in (
+            ("CONTEXT", "16384", "4096"),
+            ("SIZE", "3.4 GB", "4.1 GB"),
+            ("PROCESSOR", "48%/52% CPU/GPU", "100% CPU"),
+        ):
+            got = (
+                self.script.ps_column(PS, "qwen3.5:2b", column),
+                self.script.ps_column(PS, "qwen2.5vl:3b", column),
+            )
+            self.assertEqual(got, (first, second), column)
+        self.assertEqual(self.script.ps_column(PS, "llama3", "CONTEXT"), "")
+        self.assertEqual(self.script.ps_column("", "x", "CONTEXT"), "")
+        timing = ModelTiming(total=1.0)
+        row = self.script.row("warm 1", timing, "100% CPU", 5, "4096", "2.6 GB")
+        self.assertEqual((row["context"], row["model_ram"]), ("4096", "2.6 GB"))
+        row = self.script.row("warm 1", timing, "", 5)
+        self.assertEqual((row["context"], row["model_ram"]), ("not listed",) * 2)
+
     def test_a_result_row_has_numbers_and_the_reply_length_never_its_text(
         self,
     ) -> None:

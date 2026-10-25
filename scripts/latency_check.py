@@ -9,8 +9,9 @@ Sends three short, fixed prompts (no personal text) through the same path
 ``steel chat`` uses (``open_session``: the OpenJarvis engine from your
 config.toml, wrapped in the same guardrails) and prints, per prompt, Ollama's
 load time, prompt time, the time before the first token, generation time,
-tokens per second and the PROCESSOR column of ``ollama ps`` (CPU, GPU or a
-split). The first prompt is COLD: the script runs ``ollama stop MODEL``
+tokens per second and the PROCESSOR, CONTEXT and SIZE columns of ``ollama ps``
+(CPU, GPU or a split; the context window Ollama runs the model with; the RAM it
+takes). The first prompt is COLD: the script runs ``ollama stop MODEL``
 first, so the model must be loaded again. ``--keep-loaded`` skips that.
 
 Everything stays in SCRATCH_DIR (never your real ~/.openjarvis): the
@@ -40,19 +41,28 @@ PROMPTS = (
 _STOP_WAIT = 15.0
 
 
-def processor_of(ps_output: str, model: str) -> str:
-    """The PROCESSOR column of ``ollama ps`` for *model* ("" if not loaded)."""
+def ps_column(ps_output: str, model: str, column: str) -> str:
+    """One column of the ``ollama ps`` line for *model* ("" if not loaded)."""
     lines = ps_output.splitlines()
-    if not lines or "PROCESSOR" not in lines[0]:
+    if not lines or column not in lines[0]:
         return ""
     header = lines[0]
-    start = header.index("PROCESSOR")
-    later = [header.find(name, start) for name in ("CONTEXT", "UNTIL")]
+    start = header.index(column)
+    later = [
+        header.find(name, start + 1)
+        for name in ("NAME", "ID", "SIZE", "PROCESSOR", "CONTEXT", "RUNNER", "UNTIL")
+        if name != column
+    ]
     end = min([i for i in later if i > start], default=len(header) + 100)
     for line in lines[1:]:
         if line.split() and line.split()[0] == model:
             return line[start:end].strip()
     return ""
+
+
+def processor_of(ps_output: str, model: str) -> str:
+    """The PROCESSOR column of ``ollama ps`` for *model* ("" if not loaded)."""
+    return ps_column(ps_output, model, "PROCESSOR")
 
 
 def ollama(*args: str) -> str:
@@ -95,7 +105,14 @@ def memory_line() -> str:
     )
 
 
-def row(label: str, timing: Any, processor: str, chars: int) -> dict[str, Any]:
+def row(
+    label: str,
+    timing: Any,
+    processor: str,
+    chars: int,
+    context: str = "",
+    size: str = "",
+) -> dict[str, Any]:
     def r(value: float | None) -> float | None:
         return None if value is None else round(value, 2)
 
@@ -109,6 +126,8 @@ def row(label: str, timing: Any, processor: str, chars: int) -> dict[str, Any]:
         "tokens": timing.tokens,
         "tokens_per_s": r(timing.tokens_per_second),
         "processor": processor or "not listed",
+        "context": context or "not listed",  # what Ollama runs the model with
+        "model_ram": size or "not listed",  # SIZE of ollama ps: the model in RAM
         "reply_chars": chars,
     }
 
@@ -125,13 +144,18 @@ def main() -> None:
     from openjarvis.core.config import load_config
 
     from steel.chat import open_session
+    from steel.warm import NUM_CTX_ENV
 
     config = load_config(Path.home() / ".openjarvis" / "config.toml")
     config.memory.enabled = False  # the chat model's numbers alone
     model = config.intelligence.default_model
     print(f"model {model}; Ollama {ollama('--version').strip() or 'not found'}")
     print(memory_line())
-    for name in ("OLLAMA_KEEP_ALIVE", "STEEL_OLLAMA_KEEP_ALIVE"):
+    for name in (
+        "OLLAMA_KEEP_ALIVE",
+        "STEEL_OLLAMA_KEEP_ALIVE",
+        "STEEL_OLLAMA_NUM_CTX",
+    ):
         print(f"{name} in this shell: {os.environ.get(name, '(not set)')}")
     if not keep_loaded:
         print("cold start: ollama stop " + model)
@@ -144,8 +168,26 @@ def main() -> None:
         label = "cold" if index == 0 and not keep_loaded else f"warm {index}"
         reply = session.ask(prompt)
         assert session.last_timing is not None
-        processor = processor_of(ollama("ps"), model)
-        print(json.dumps(row(label, session.last_timing, processor, len(reply))))
+        ps = ollama("ps")
+        print(
+            json.dumps(
+                row(
+                    label,
+                    session.last_timing,
+                    processor_of(ps, model),
+                    len(reply),
+                    ps_column(ps, model, "CONTEXT"),
+                    ps_column(ps, model, "SIZE"),
+                )
+            )
+        )
+        context = ps_column(ps, model, "CONTEXT")
+        if context and context != str(session.num_ctx):
+            print(
+                f"  CONTEXT {context} is not the {session.num_ctx} STEEL asks for "
+                f"({NUM_CTX_ENV}): another program loaded the model with another "
+                "context, and Ollama will reload it when the contexts differ"
+            )
     print(memory_line())
     print("--- ollama ps")
     print(ollama("ps").rstrip())
