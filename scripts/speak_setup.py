@@ -150,6 +150,11 @@ def fetch_voice(
     opener: Callable[[str], BinaryIO] = _open_url,
 ) -> None:
     directory = voice_dir(home, voice)
+    if not dry_run:
+        # Both levels private, also on a re-run (mkdir's mode is only a default).
+        for level in (directory.parent, directory):
+            level.mkdir(mode=0o700, parents=True, exist_ok=True)
+            os.chmod(level, 0o700)
     for pinned in voice.files():
         if file_ok(directory / pinned.name, pinned, verify_hash=True):
             print(f"voice {voice.name}: {pinned.name} already there and checked")
@@ -159,8 +164,6 @@ def fetch_voice(
                 f"voice {voice.name}: would fetch {voice.url(pinned)} ({pinned.size} bytes)"
             )
             continue
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        os.chmod(directory, 0o700)
         fetch_file(voice, pinned, directory, opener=opener)
         print(
             f"voice {voice.name}: fetched {pinned.name}, {pinned.size} bytes, SHA-256 {pinned.sha256}"

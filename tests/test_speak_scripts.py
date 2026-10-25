@@ -84,6 +84,7 @@ class SetupVoicesTest(unittest.TestCase):
         self.fetch(self.good)
         directory = voice_dir(self.home, self.voice)
         self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o700)
+        self.assertEqual(stat.S_IMODE(directory.parent.stat().st_mode), 0o700)
         for pinned in self.voice.files():
             path = directory / pinned.name
             self.assertEqual(path.read_bytes(), self.good[pinned.name])
@@ -100,8 +101,12 @@ class SetupVoicesTest(unittest.TestCase):
 
     def test_files_already_there_and_correct_are_not_fetched_again(self) -> None:
         self.fetch(self.good)
+        voice_dir(self.home, self.voice).parent.chmod(0o775)
         again = self.fetch(self.good)
         self.assertEqual(again.urls, [])
+        # A re-run still makes the directories private.
+        mode = voice_dir(self.home, self.voice).parent.stat().st_mode
+        self.assertEqual(stat.S_IMODE(mode), 0o700)
 
     def test_a_dry_run_fetches_and_writes_nothing(self) -> None:
         opener = self.fetch(self.good, dry_run=True)
