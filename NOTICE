@@ -1,0 +1,96 @@
+STEEL
+Copyright 2026 DKAA04
+
+STEEL is licensed under the Apache License, Version 2.0 (see LICENSE).
+This file lists the third-party work STEEL builds on or uses. It is a record
+of what is used and under which terms, not legal advice.
+
+Only STEEL's own code and documents are in this repository. The models,
+voices and programs below are installed or downloaded separately onto the
+owner's machine; they are not part of this repository and keep their own
+licences.
+
+
+1. Included in this repository (adapted code)
+---------------------------------------------
+
+OpenJarvis
+  https://github.com/open-jarvis/OpenJarvis
+  Copyright 2025 The OpenJarvis Authors
+  Licensed under the Apache License, Version 2.0.
+  STEEL imports OpenJarvis (pinned to commit
+  108d257188cbad85f2e50209d9a61669ea4dec33) and does not copy or modify it,
+  except for the ported pieces listed in docs/PROVENANCE.md:
+  steel/security/policy.py is adapted from
+  src/openjarvis/security/capabilities.py (changed to deny by default; the
+  file header and docs/PROVENANCE.md say what changed).
+
+
+2. Used, not distributed with STEEL
+-----------------------------------
+
+faster-whisper (speech to text), MIT License.
+  https://github.com/SYSTRAN/faster-whisper
+  Installed into the OpenJarvis environment; imported by STEEL's voice code.
+
+Whisper models, MIT License.
+  OpenAI Whisper (https://github.com/openai/whisper), in the CTranslate2
+  conversions Systran/faster-whisper-small and Systran/faster-whisper-base
+  (MIT). Downloaded by the owner; revisions and checksums in docs/VOICE.md.
+
+onnxruntime, MIT License.
+  https://github.com/microsoft/onnxruntime
+  Loaded by faster-whisper (voice detection) and by Piper. It contains
+  Microsoft telemetry, which STEEL switches off with ORT_DISABLE_TELEMETRY=1
+  (docs/VOICE.md section 3).
+
+Piper (piper-tts 1.8.0), GNU General Public License v3.0 or later.
+  https://github.com/OHF-Voice/piper1-gpl (it includes espeak-ng, also
+  GPL-3.0-or-later).
+  Used as a separate program: STEEL starts it from its own virtual
+  environment and talks to it only through pipes. STEEL does not import,
+  copy or distribute Piper (docs/SPEAK.md section 4). Anyone who distributes
+  Piper together with STEEL takes on the GPL's obligations for Piper.
+
+
+3. Voices (downloaded by scripts/speak_setup.py, not in this repository)
+-------------------------------------------------------------------------
+
+From https://huggingface.co/rhasspy/piper-voices at revision
+5041a7a49ae5b3a0f30e6837769eb03fdbb231bd. A voice's licence is that of the
+recordings it was trained on (docs/SPEAK.md section 3).
+
+en_US-john-medium
+  Recordings from LibriVox (https://librivox.org): public domain.
+  Fine-tuned from the "kristin" voice (LibriVox, public domain).
+
+es_ES-carlfm-x_low
+  Recordings from https://github.com/carlfm01/my-speech-datasets:
+  public domain.
+
+it_IT-riccardo-x_low
+  Trained on the M-AILABS Speech Dataset (Italian; the audio comes from
+  LibriVox). Custom M-AILABS licence. Its condition is that redistributions
+  of the data keep the copyright notice, the conditions and the disclaimer,
+  which follow word for word. The dataset's own page
+  (https://www.caito.de/2019/01/03/the-m-ailabs-speech-dataset/) could not
+  be reached on 2026-10-25; this text was taken that day from the README of
+  the dataset author's repository,
+  https://github.com/i-celeste-aurora/m-ailabs-dataset
+  (README.md, SHA-256
+  8cd5aee8d0b8caff7119987bc6e0e4bc7d725f7c52ccc51d7edff865caf83b25), which
+  says it replaces any earlier licence restrictions:
+
+    Copyright (c) 2017-2019 by the original creators @ M-AILABS
+
+    Copyright (c) 2020 I. Celeste Aurora Solak (github.com/i-celeste-aurora)
+
+    Redistribution and use in any form, including any commercial use, with or without modification are permitted provided that the following conditions are met:
+
+    - Redistributions of source data must retain the above copyright notice, this list of conditions and the following disclaimer.
+    - Neither the name of the copyright holder nor the names of its contributors may be used to endorse or promote products derived from this downloaded data, source-code or binary-code without specific prior written permission.
+
+    THIS DATA IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE and/or DATA, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+The optional voices that scripts/speak_setup.py fetches only on request
+(--voice) have their own terms, listed in docs/SPEAK.md section 3.

@@ -194,6 +194,12 @@ python scripts/quality_check.py /tmp/steel-qc   # live model, scratch dir; optio
 python scripts/speak_check.py                   # live speakers; optional, the owner's
 ```
 
+## Licence
+
+STEEL's own code and documents are licensed under the Apache License 2.0 ([LICENSE](LICENSE); the copyright line there is a placeholder the owner may replace). [NOTICE](NOTICE) lists what STEEL builds on and uses: OpenJarvis (Apache-2.0; the ported file is in [docs/PROVENANCE.md](docs/PROVENANCE.md)), faster-whisper and the Whisper models (MIT), onnxruntime (MIT), Piper (GPL-3.0-or-later, run as a separate program and not distributed with STEEL) and the voices with their licences, including the M-AILABS notice for the Italian voice.
+
+**Downloaded models and voices are not part of this repository** and keep their own licences: the Whisper models, the Ollama models, Piper's engine environment and the Piper voices are fetched onto your machine by you or by the setup scripts. This is a record of the terms, not legal advice.
+
 ## Credits and provenance
 
 STEEL is built on **OpenJarvis** (Apache-2.0, https://github.com/open-jarvis/OpenJarvis). It imports the OpenJarvis core (config, event bus, engine, guardrails, MemoryService, fact extractor, fact store) and does not copy or modify it. One file is adapted from OpenJarvis (`steel/security/policy.py`, from `security/capabilities.py`, with the default inverted to deny); it carries a provenance header and a row in [docs/PROVENANCE.md](docs/PROVENANCE.md). Everything else is imported, not copied. The voice code deliberately does **not** import `openjarvis.speech` (its discovery can pick a cloud service, and its Whisper backend writes the audio to a temp file); it uses `faster-whisper` (MIT) directly with Systran's MIT-licensed model conversions, see [docs/VOICE.md](docs/VOICE.md) section 2 and [docs/PROVENANCE.md](docs/PROVENANCE.md). Spoken replies use **Piper** (GPL-3.0-or-later, https://github.com/OHF-Voice/piper1-gpl, with espeak-ng), which is installed separately and run as a separate program, never imported or redistributed, and voices from `rhasspy/piper-voices` whose licences are those of their recordings ([docs/SPEAK.md](docs/SPEAK.md) sections 3 and 4).

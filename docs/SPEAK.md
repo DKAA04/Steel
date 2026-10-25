@@ -65,7 +65,7 @@ Voices come from the Hugging Face repository `rhasspy/piper-voices`, pinned to r
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | `en_US-john-medium` | English (US) | male | medium, 22,050 Hz | 63,531,379 | `789c6c875726e627ddee93d51d8727859abe9c091c3d141591f4b83c2072e988` | LibriVox, **public domain** | fine-tuned from `kristin` (LibriVox, public domain, trained from scratch) |
 | `es_ES-carlfm-x_low` | Spanish (Spain) | male | x_low, 16,000 Hz | 28,130,791 | `d69677323a907cd4963f42b29c20a98b5d6bfa7f3e64df339915e4650c00d125` | carlfm01/my-speech-datasets, **public domain** | trained from scratch |
-| `it_IT-riccardo-x_low` | Italian | male | x_low, 16,000 Hz | 28,130,791 | `1368de15f123275a7ef951c9e5e30be0f58a032daa14a0da44037443c1d1d21b` | M-AILABS speech dataset (LibriVox recordings, which are public domain), **custom M-AILABS licence**: "Copyright (c) 2017-2019 by the original creators @ M-AILABS"; the licence text itself could not be retrieved on 2026-10-25 (its site did not resolve) | trained from scratch |
+| `it_IT-riccardo-x_low` | Italian | male | x_low, 16,000 Hz | 28,130,791 | `1368de15f123275a7ef951c9e5e30be0f58a032daa14a0da44037443c1d1d21b` | M-AILABS speech dataset (LibriVox recordings, which are public domain), **custom M-AILABS licence** (BSD-style: use, including commercial use, is allowed; redistributions of the data must keep the copyright notice, conditions and disclaimer). The dataset's own page did not resolve; the full text, taken on 2026-10-25 from the dataset author's repository `github.com/i-celeste-aurora/m-ailabs-dataset`, is quoted word for word in [NOTICE](../NOTICE) | trained from scratch |
 
 Each comes with its `.onnx.json` (Piper's configuration) and `MODEL_CARD`, pinned too:
 
@@ -104,7 +104,7 @@ unshare --net --map-root-user -- <engine>/bin/python -I -m piper -m <voice>.onnx
 * **Audio comes out on standard output** as raw 16-bit mono PCM (`--output-raw` writes only to stdout; Piper's file and `ffplay` modes are not used).
 * Standard error is discarded, the working directory is `/`, and the environment holds only `LANG`/`LC_ALL` (`C.UTF-8`) and `ORT_DISABLE_TELEMETRY=1`: no proxies, no keys, no `HOME`. `-I` makes Python ignore `PYTHON*` variables, the user's site directory and the current directory.
 
-Two programs that talk only through pipes and a command line, each run as its own process, are what the GPL FAQ calls communicating "at arms length" ("mere aggregation"), not one combined program; STEEL's own code is then not a work based on Piper. STEEL also does not distribute Piper or the voices: the setup script downloads them onto the owner's machine. This is the design's reading of the FSF FAQ, **not legal advice**. STEEL currently has no licence file of its own (an open question, section 9).
+Two programs that talk only through pipes and a command line, each run as its own process, are what the GPL FAQ calls communicating "at arms length" ("mere aggregation"), not one combined program; STEEL's own code is then not a work based on Piper. STEEL also does not distribute Piper or the voices: the setup script downloads them onto the owner's machine. This is the design's reading of the FSF FAQ, **not legal advice**. Since Phase 5b STEEL's own code is Apache-2.0 (`LICENSE`, `NOTICE`), which is consistent with this boundary: STEEL is not a work based on Piper, so it need not be GPL.
 
 **No network at run time, enforced.** `unshare --net` puts the engine in a new network namespace with only a loopback interface that is down, so it cannot reach this machine's network or the internet, whatever its libraries try. If `unshare` is missing or fails, STEEL does **not** start the engine (it says why and stays silent). The 2.1 measurements were taken this way, so the engine needs no network to speak. STEEL's own process opens no socket while speaking; a test blocks `socket.connect` and `getaddrinfo` as for Whisper.
 
@@ -179,7 +179,7 @@ The microphone is push-to-talk (docs/VOICE.md): it is open only while the owner 
 
 1. Keep `en_US-john-medium` (US, public domain) or take the British `en_GB-northern_english_male-medium` despite its lessac lineage?
 2. Spanish and Italian: the clean-licence `x_low` voices, or the better-sounding `es_ES-davefx-medium` / `it_IT-serena-medium` (female)?
-3. Should STEEL get a licence file, and which? Section 4 assumes STEEL is not itself GPL.
+3. ~~Should STEEL get a licence file?~~ Answered in Phase 5b: Apache-2.0 (`LICENSE`, `NOTICE`).
 4. Is a 4 s delay acceptable, or should a long-lived engine helper (a GPL program of its own) be written?
 5. Delete the onnxruntime telemetry queue in `~/.cache/Microsoft/DeveloperTools/.onnxruntime/`?
 

@@ -1,5 +1,6 @@
 [build-system]
-requires = ["setuptools>=69"]
+# 77+ understands the SPDX licence string and license-files below.
+requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -7,6 +8,8 @@ name = "steel"
 version = "0.2.0"
 description = "STEEL: a personal assistant layer on top of OpenJarvis (user-controlled memory, a permission policy, read-only memory tools, push-to-talk local voice input, one-snapshot local vision)."
 readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 # OpenJarvis at the pinned commit supports Python >=3.10,<3.14.
 requires-python = ">=3.11,<3.14"
 dependencies = [
