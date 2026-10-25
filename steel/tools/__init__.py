@@ -146,6 +146,7 @@ def get_speak_tool(
     engine: Synthesizer | None = None,
     open_sink: Callable[[], AudioSink] | None = None,
     indicator: SpeakingIndicator | None = None,
+    clock: Callable[[], float] | None = None,
 ) -> Speak:
     """The speak tool, wired to Piper (separate process), aplay and the terminal.
 
@@ -163,6 +164,7 @@ def get_speak_tool(
         open_sink=open_sink or AplaySink,
         indicator=indicator or SpeakingIndicator(),
         keys=keys or TypedLineStop(),
+        **({"clock": clock} if clock is not None else {}),
     )
 
 

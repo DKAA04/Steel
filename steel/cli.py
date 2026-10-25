@@ -13,6 +13,7 @@ steel tool call NAME --agent ID [--args JSON]   run ONE tool call through the po
 steel voice check|consent|revoke|listen   push-to-talk voice input (docs/VOICE.md); check is read-only
 steel chat --voice [--speak]   chat where an empty line means "speak"
 steel chat --speak        replies are also read aloud (local Piper; docs/SPEAK.md)
+steel chat --timings      one line of stage times after each turn (docs/LATENCY.md)
 steel speak check|say "TEXT"   spoken replies: check is read-only, say speaks one sentence
 steel vision check|consent|revoke   one-snapshot camera (docs/VISION.md); check is read-only
 steel look ["question"] [--save] [--hours N]   ONE picture, described by the local vision model
@@ -268,6 +269,12 @@ def main(argv: list[str] | None = None) -> int:
         help="Read replies aloud with the local Piper engine (needs the "
         "audio:play grant for agent voice; docs/SPEAK.md).",
     )
+    chat.add_argument(
+        "--timings",
+        action="store_true",
+        help="After each turn, print one line of stage times (numbers only; "
+        "docs/LATENCY.md).",
+    )
     mem = sub.add_parser("memory", help="Inspect memory.")
     mem.add_argument("action", choices=["list", "audit"])
     remember = sub.add_parser(
@@ -494,7 +501,7 @@ def main(argv: list[str] | None = None) -> int:
         if not has_consent(home):  # before loading a model: nothing to wait for
             return voice_commands.no_consent()
         return voice_commands.run_voice_repl(
-            open_session(config, home), home, speak=args.speak
+            open_session(config, home), home, speak=args.speak, timings=args.timings
         )
     elif args.command == "chat":
         from steel.chat import open_session, run_repl
@@ -507,7 +514,12 @@ def main(argv: list[str] | None = None) -> int:
 
             speaker = ChatSpeaker(home)
         session = open_session(config, home)
-        run_repl(session, build_slash(home, session, Terminal()), speaker)
+        run_repl(
+            session,
+            build_slash(home, session, Terminal()),
+            speaker,
+            timings=args.timings,
+        )
     return 0
 
 

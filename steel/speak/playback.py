@@ -27,6 +27,7 @@ _WALL_SLACK = 30.0
 class Playback:
     seconds: float  # audio passed to the player
     reason: str  # finished, key, cancelled, limit, no_audio
+    first_audio_at: float | None = None  # clock() when the first audio left
 
 
 def play(
@@ -56,6 +57,7 @@ def play(
     buffer = bytearray(CHUNK_BYTES)
     view = memoryview(buffer)
     played = 0
+    first_audio_at: float | None = None
     started = clock()
     last_drawn = 0.0
     reason = "finished"
@@ -81,6 +83,8 @@ def play(
             if not count:
                 break  # the engine is done
             sink.write(view[:count])
+            if first_audio_at is None:
+                first_audio_at = clock()
             played += count
             if played / (2 * rate) >= max_seconds:
                 reason = "limit"
@@ -108,4 +112,4 @@ def play(
             indicator.finished(seconds)
         else:
             indicator.stopped(seconds)
-    return Playback(seconds=seconds, reason=reason)
+    return Playback(seconds=seconds, reason=reason, first_audio_at=first_audio_at)

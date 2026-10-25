@@ -30,6 +30,7 @@ from steel.speak.voices import (
     voice_dir,
     voices_root,
 )
+from steel.timings import SpeechTiming
 from steel.tools import SPEAK_TOOL, get_speak_tool
 
 SPEAK_AGENT = "voice"
@@ -64,9 +65,11 @@ class ChatSpeaker:
         self.tool = tool or get_speak_tool(home, keys=self.keys)
         self._executor = _executor(home, self.tool)
         self.silenced = False
+        self.last_timing: SpeechTiming | None = None  # for --timings
 
     def say(self, reply: str) -> str | None:
         """Speak *reply*; return the line the owner typed to stop it, if any."""
+        self.last_timing = None
         if self.silenced or not reply.strip():
             return None
         try:
@@ -77,6 +80,11 @@ class ChatSpeaker:
             self.tool.wait_idle(CANCEL_WAIT_SECONDS)
             return None
         if result.success:
+            first = result.metadata.get("first_audio_seconds")
+            self.last_timing = SpeechTiming(
+                first_audio=first if isinstance(first, (int, float)) else None,
+                played=float(result.metadata.get("seconds", 0.0)),
+            )
             return self.keys.take_line()
         if result.content.startswith("Capability '"):
             self.silenced = True  # asked once, logged once

@@ -19,7 +19,7 @@ from typing import Any
 
 from openjarvis.core.types import ToolCall
 
-from steel.chat import LEAVE_HINT, ChatSession, finish, is_leave_line
+from steel.chat import LEAVE_HINT, ChatSession, finish, is_leave_line, print_timings
 from steel.home import MODELS_DIR, POLICY_FILE
 from steel.security import PolicyError, SteelPolicy, policy_or_deny_all
 from steel.security.executor import build_executor
@@ -252,6 +252,7 @@ def run_voice_repl(
     tool: Any = None,
     speaker: Any = None,
     slash: SlashCommands | None = None,
+    timings: bool = False,
 ) -> int:
     """``steel chat --voice``. An empty line means "speak"; typing still works.
 
@@ -322,6 +323,8 @@ def run_voice_repl(
             print("steel>", reply)
             if speaker is not None:
                 pending = speaker.say(reply)  # after the recording, never during
+            if timings:
+                print_timings(session, speaker)
     except KeyboardInterrupt:
         print()
     finally:

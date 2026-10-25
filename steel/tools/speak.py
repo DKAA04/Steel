@@ -11,6 +11,7 @@ contains the text, and no text reaches the decision log.
 from __future__ import annotations
 
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any, Protocol
@@ -56,7 +57,9 @@ class Speak(BaseTool):
         open_sink: Callable[[], AudioSink],
         indicator: SpeakingIndicator,
         keys: StopKeys,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        self._clock = clock
         self._home = home
         self._config = config
         self._engine = engine
@@ -99,6 +102,7 @@ class Speak(BaseTool):
         return False
 
     def execute(self, **params: Any) -> ToolResult:
+        started = self._clock()
         text = params.get("text")
         if set(params) != {"text"} or not isinstance(text, str):
             return self._failed("Unexpected arguments.")
@@ -136,6 +140,7 @@ class Speak(BaseTool):
                     max_seconds=self._config.max_audio_seconds,
                     stop_requested=self._keys.stop_requested,
                     cancelled=self._cancel.is_set,
+                    clock=self._clock,
                 )
             except SpeakingIndicatorError as exc:
                 return self._failed(f"Not spoken: {exc}.")
@@ -160,6 +165,12 @@ class Speak(BaseTool):
                 "seconds": round(done.seconds, 1),
                 "stopped_by": done.reason,
                 "cut": speech.cut,
+                # For --timings: a number only, never the text.
+                "first_audio_seconds": (
+                    None
+                    if done.first_audio_at is None
+                    else round(done.first_audio_at - started, 3)
+                ),
             },
         )
 

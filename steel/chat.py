@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import threading
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -23,6 +25,7 @@ from openjarvis.tools.storage.context import ContextConfig, inject_context
 
 from steel.extractor import SteelFactExtractor
 from steel.memory import SteelMemory
+from steel.timings import ModelTiming, model_timing
 from steel.tooldata import ToolData
 
 if TYPE_CHECKING:
@@ -105,6 +108,9 @@ class ChatSession:
     bus: EventBus
     service: MemoryService | None
     history: list[Message] = field(default_factory=list)
+    # Stage times of the last turn, for --timings (numbers only, never stored).
+    last_timing: ModelTiming | None = None
+    clock: Callable[[], float] = time.monotonic
 
     def _system_prompt(self) -> str:
         """Base prompt plus the user-authored MEMORY.md / USER.md entries."""
@@ -140,7 +146,9 @@ class ChatSession:
             config=ContextConfig(),
             facts=self.memory.facts.list(),
         )
+        started = self.clock()
         result = self.engine.generate(messages, model=self.model)
+        self.last_timing = model_timing(result, self.clock() - started)
         reply = str(result.get("content", "") if isinstance(result, dict) else result)
         # Remember the turn in RAM for the rest of this session only.
         self.history.append(Message(role=Role.USER, content=user_text))
@@ -241,6 +249,8 @@ def run_repl(
     session: ChatSession,
     slash: SlashCommands | None = None,
     speaker: ChatSpeaker | None = None,
+    *,
+    timings: bool = False,
 ) -> None:
     """Interactive loop. /quit, a bare exit or quit, or Ctrl-D leaves.
 
@@ -287,10 +297,22 @@ def run_repl(
             print("steel>", reply)
             if speaker is not None:
                 pending = speaker.say(reply)
+            if timings:
+                print_timings(session, speaker)
     except KeyboardInterrupt:
         print()
     finally:
         finish(session)
+
+
+def print_timings(session: ChatSession, speaker: ChatSpeaker | None) -> None:
+    """``--timings``: the stage times of the turn just done, numbers only."""
+    if session.last_timing is None:
+        return
+    from steel.timings import timing_line
+
+    speech = speaker.last_timing if speaker is not None else None
+    print(timing_line(session.last_timing, speech))
 
 
 def finish(session: ChatSession) -> None:
