@@ -9,6 +9,10 @@ from pathlib import Path
 from openjarvis.tools._stubs import BaseTool
 
 from steel.memory import SteelMemory
+from steel.speak.config import SpeakConfig, speak_config
+from steel.speak.indicator import SpeakingIndicator
+from steel.speak.player import AudioSink
+from steel.speak.synth import Synthesizer
 from steel.tools.camera import CAMERA_TOOL, CameraLook, StartKey
 from steel.tools.memory_search import (
     MemorySearchFacts,
@@ -21,6 +25,7 @@ from steel.tools.microphone import (
     PushToTalk,
     Transcriber,
 )
+from steel.tools.speak import SPEAK_TOOL, Speak, StopKeys
 from steel.vision.config import VisionConfig, vision_config
 from steel.vision.describe import Describer
 from steel.vision.indicator import CameraIndicator
@@ -133,15 +138,46 @@ def get_camera_tool(
     )
 
 
+def get_speak_tool(
+    home: Path,
+    *,
+    keys: StopKeys | None = None,
+    config: SpeakConfig | None = None,
+    engine: Synthesizer | None = None,
+    open_sink: Callable[[], AudioSink] | None = None,
+    indicator: SpeakingIndicator | None = None,
+) -> Speak:
+    """The speak tool, wired to Piper (separate process), aplay and the terminal.
+
+    Building it starts and opens nothing: the engine and the speaker are
+    touched only inside ``execute``, after the policy allowed it.
+    """
+    from steel.speak.keys import TypedLineStop
+    from steel.speak.player import AplaySink
+    from steel.speak.synth import PiperEngine, engine_dir
+
+    return Speak(
+        home=home,
+        config=config or speak_config(),
+        engine=engine or PiperEngine(engine_dir()),
+        open_sink=open_sink or AplaySink,
+        indicator=indicator or SpeakingIndicator(),
+        keys=keys or TypedLineStop(),
+    )
+
+
 __all__ = [
     "CAMERA_TOOL",
     "MICROPHONE_TOOL",
+    "SPEAK_TOOL",
     "CameraLook",
     "MemorySearchFacts",
     "MemorySearchNotes",
     "MemorySearchRoom",
     "MicrophoneListen",
+    "Speak",
     "get_camera_tool",
     "get_memory_tools",
     "get_microphone_tool",
+    "get_speak_tool",
 ]
