@@ -184,9 +184,35 @@ Nothing of Piper is imported into STEEL's process; the boundary is the pipe (doc
 | `scripts/speak_check.py` | The owner's live check through the real speakers; scratch grant |
 | `docs/SPEAK.md` | The design (written first), measurements, licences, and the test for each claim |
 
+### Phase 5b: a faster turn (docs/LATENCY.md)
+
+```mermaid
+sequenceDiagram
+    participant O as owner
+    participant C as steel chat
+    participant M as local Ollama
+    participant P as Piper (separate process)
+    C->>M: warm-up at start: "ready", 1 token (background thread)
+    O->>C: message
+    C->>P: start early for the message's voice (only with the grant; no text)
+    C->>M: generate (not streamed: the guardrails redact the output)
+    M-->>C: reply (redacted)
+    C->>P: the cleaned reply on stdin, then end of file
+    P-->>C: audio, already loaded voice
+    C-->>O: --timings: one line of numbers
+```
+
+| Module | Role |
+| --- | --- |
+| `steel/timings.py` | `--timings`: Ollama's durations and STEEL's clock to one line of numbers |
+| `steel/warm.py` | The warm-up request and `STEEL_OLLAMA_KEEP_ALIVE` (a transport that adds `keep_alive`), for a local `OllamaEngine` only |
+| `steel/speak/synth.py` | Also: `prepare` starts the engine early and keeps at most one waiting; `start` uses it if it is for the same voice and alive; `close`; `setpriv --pdeathsig KILL` |
+| `scripts/latency_check.py` | The owner's measurement: cold and warm prompts through `open_session`, Ollama's numbers, `ollama ps` PROCESSOR |
+| `docs/LATENCY.md` | The measurement plan (written first), findings (GPU, streaming, Piper), the fixes and their tests |
+
 ### Relationship to OpenJarvis
 
-STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`. The slash commands reuse `SecretScanner`, `PIIScanner` and `InjectionScanner` on tool results, and the stock `ToolExecutor` through `build_executor`.
+STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). Since Phase 5b, for a local `OllamaEngine` and only with `STEEL_OLLAMA_KEEP_ALIVE` set, STEEL replaces that engine's private `_client` with an `httpx.Client` of its own (same address and timeout) whose transport adds `keep_alive`; it reads the private `_host`, `_timeout` and the guardrails wrapper's `_engine`, which the pin protects. The chat calls `generate`, never `stream`, because `GuardrailsEngine.stream` does not redact the output (docs/LATENCY.md section 4). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`. The slash commands reuse `SecretScanner`, `PIIScanner` and `InjectionScanner` on tool results, and the stock `ToolExecutor` through `build_executor`.
 
 STEEL constructs `MemoryService` itself instead of calling `build_memory_service`, because that helper would create a plain `LocalFactStore` (no forget-by-id, duplicate guard or routing) and OpenJarvis' `FactExtractor`. `SteelFactExtractor` subclasses it and uses only its public `extract` and `system_prompt`. `SteelFactStore.forget` holds the same thread lock and cross-process file lock as upstream `add`/`clear`, and uses LocalFactStore private members. That is why the pin is enforced at runtime.
 
@@ -205,4 +231,4 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 ## Planned extension points
 
-`SteelPolicy`, the first tools, push-to-talk voice, camera snapshots (Phases 2a to 3), slash commands (Phase 4) and spoken replies (Phase 5a) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.
+`SteelPolicy`, the first tools, push-to-talk voice, camera snapshots (Phases 2a to 3), slash commands (Phase 4), spoken replies (Phase 5a) and the latency work (Phase 5b) are built and tested; connecting a tool to the chat model is not done. Voice and vision publish nothing on the OpenJarvis `EventBus`. These are plans, not implemented boundaries.

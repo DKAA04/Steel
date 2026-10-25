@@ -93,6 +93,10 @@ Nothing in STEEL issues slash commands automatically, so these limits guard agai
 
 Room notes are camera descriptions, so they get their own capability, `memory:read:room`, and their own tool, `memory_search_room`. `memory_search_notes` no longer returns room notes. A grant for one does not allow the other, and the grant wildcard `memory:read:*` does **not** cover `memory:read:room` (like sensors, it needs its exact name), so a grants file written before Phase 4 does not silently start reading camera text.
 
+### Also: streaming would bypass output redaction (Phase 5b)
+
+The model's reply is redacted by OpenJarvis' `GuardrailsEngine` only on its non-streaming path: `stream()` yields tokens unredacted and logs findings afterwards (docs/LATENCY.md section 4). STEEL therefore does not stream; the reply is shown, kept in the history and spoken only after `generate()` has redacted it. Test: `test_latency.py::NoStreamingTest.test_the_chat_never_streams_so_the_guardrails_redact_the_reply`. Nothing here changes what the model may do: its reply is still never parsed for commands.
+
 ### Also: spoken replies (Phase 5a)
 
 `--speak` adds an **output** channel, not an input one: after a reply is printed, STEEL itself (not the model) passes that reply to the `speak` tool, as agent `voice` with its own grant (`audio:play`). The model cannot start it, choose what it says or call anything else through it, and one reply is one spoken call. What it may say is limited by docs/SPEAK.md section 6: a reply that contains a tool-data block (`[Tool result from`, `[End of tool result]`) or camera text (`[Camera description`) is not spoken at all, nor is one the injection scanner flags or cannot check, and the rest is redacted and capped. So an injected tool result cannot be read aloud verbatim; but a model misled by data the owner added can still *say* something misleading, aloud, to whoever is in the room. Tests: docs/SPEAK.md section 10 (for example `test_speak_cli.py::ChatSpeakTest.test_a_reply_that_repeats_tool_data_is_not_spoken`).

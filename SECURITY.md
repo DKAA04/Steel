@@ -117,7 +117,15 @@ Full list in [docs/SPEAK.md](docs/SPEAK.md) section 8.
 - **The engine is a separate GPL program, trusted like any installed program.** It runs as you, can read your files, and is given only the reply text; it runs in a network namespace with no network (`unshare --net`), with onnxruntime telemetry switched off and a minimal environment. Without `unshare` nothing is spoken. Its environment and the voices are installed from pinned hashes by `scripts/speak_setup.py`; at run time only the voice files' sizes are checked (`steel speak check` verifies the hashes).
 - **Audio stays in pipes and one buffer in RAM** that is zeroed afterwards (best effort: the kernel's pipe buffers and the player's own buffers are out of STEEL's reach). No audio or temporary file is written.
 - **The SPEAKING line is software**, like the REC line: it stops mistakes, not code inside STEEL's process. Another program can play sound at any time.
-- **Not tested with the real speakers** (a rule of this project for the test suite). The real engine was run once per language into memory with nothing played; `scripts/speak_check.py` is the owner's live check and has not been run.
+- **Not tested with the real speakers** (a rule of this project for the test suite). The real engine was run into memory with nothing played; `scripts/speak_check.py` is the owner's live check, which the owner reported working on 2026-10-25.
+- **With `--speak`, an engine may be waiting (Phase 5b).** Just before the model is asked, the chat starts the engine for the voice it will probably need, so the voice loads while the model writes. That engine has no text, no network and no audio device; it holds the voice in memory (about 142 MiB) until the reply arrives on its stdin. It is started only with your grant, and your message only picks the voice. The chat stops it on every exit, and it is started through `setpriv --pdeathsig KILL`, so the kernel kills it if STEEL dies.
+
+## Speed settings (Phase 5b)
+
+- **The warm-up is one extra request to the model** when `steel chat` starts: the fixed word `ready`, at most one token, no user text, no memory. It is sent only to an Ollama on this computer; any other engine or host gets none.
+- **`STEEL_OLLAMA_KEEP_ALIVE` keeps the model in RAM longer** (up to 24 hours) after each of STEEL's requests. A loaded model (2.7 GB here) is memory other programs cannot use, and it can push them into swap. It applies only to a local Ollama, and only to STEEL's requests; the client that adds it ignores proxy variables.
+- **The reply is not streamed, on purpose.** OpenJarvis' `GuardrailsEngine` redacts the model's output in `generate()`, but `stream()` yields every token unredacted and only logs findings afterwards. Streaming would show and keep unredacted text, so STEEL does not stream. A test pins it (docs/LATENCY.md section 4). As far as the pinned `GuardrailsEngine` code shows, anything that streams through it gets no output redaction; which OpenJarvis front ends stream was not checked.
+- **`--timings` prints numbers only**, never text, and nothing of it is logged or stored.
 
 ## Before anything new is connected
 

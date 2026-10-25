@@ -200,7 +200,7 @@ What it would need before it is built: a separate written consent that says "alw
 * **Transcripts reach the terminal.** `steel voice listen` and `steel chat --voice` print the transcript, so it ends up in the terminal's scrollback.
 * **Another program can record at the same time.** PipeWire allows several clients; the REC line shows only STEEL's own recording.
 * **The executor stops waiting** after the start-key wait, the maximum length and 90 s for the model; the recording itself ends far earlier, so the microphone is closed before that can happen.
-* **Spoken replies:** see docs/SPEAK.md (Phase 5a). They are never played while recording: the chat loop speaks a reply only after the recording has ended.
+* **Spoken replies:** see docs/SPEAK.md (Phase 5a). They are never played while recording: the chat loop speaks a reply only after the recording has ended. Since Phase 5b, with `--speak`, the language of the confirmed transcript chooses which voice the engine loads early, after the microphone has closed and before the model is asked (docs/SPEAK.md section 6). The transcript itself never reaches the engine, and a discarded transcript starts nothing.
 * **The transcript of a bystander** can be confirmed by mistake; nothing detects "this is not my voice".
 * **The model directory is trusted.** A replaced `model.bin` would run as the owner. The SHA-256 values in section 3 are recorded so they can be compared by hand; STEEL does not check them.
 * Open questions for the owner: whether `steel wipe` should also offer to delete the consent file, whether the allowed-language default should stay `en,es,it`, and whether to keep both models.
