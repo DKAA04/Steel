@@ -2,7 +2,7 @@
 
 ## Phases 1 and 1b: persistent memory, no tools
 
-(Phase 2a added a permission policy, Phase 2b two read-only memory tools that only `steel tool call` runs, Phase 2c push-to-talk voice input and Phase 3 one-picture camera snapshots; see the sections after the memory notes below.)
+(Phase 2a added a permission policy, Phase 2b read-only memory tools, Phase 2c push-to-talk voice input, Phase 3 one-picture camera snapshots and Phase 4 slash commands that the owner types in `steel chat`; see the sections after the memory notes below. The model still has no tools.)
 
 ```mermaid
 flowchart LR
@@ -27,14 +27,14 @@ flowchart LR
 | `steel/cli.py` | `steel` entry point. Checks the pin, sets `OPENJARVIS_NO_UPDATE_CHECK=1`, hardens permissions |
 | `steel/pin.py` | Refuses any OpenJarvis other than `1.0.5.dev119+g108d257` (commit `108d257`) |
 | `steel/home.py` | Resolves the OpenJarvis home; dir 700, files 600, umask 077 |
-| `steel/chat.py` | Direct `engine.generate` calls with no agent and no tools; starts a `MemoryService` on `SteelFactStore` |
-| `steel/extractor.py` | `SteelFactExtractor`: sends only the user's message with a stricter prompt; drops answer-like results |
+| `steel/chat.py` | Direct `engine.generate` calls with no agent and no tools for the model; starts a `MemoryService` on `SteelFactStore`; `add_tool_data` puts a result the owner chose into the RAM history only (Phase 4) |
+| `steel/extractor.py` | `SteelFactExtractor`: sends only the user's message with a stricter prompt; drops answer-like results; skips any text holding a wrapped tool result |
 | `steel/similarity.py` | Near-duplicate and related-fact matching (word overlap, English and Spanish, thresholds in one place) |
 | `steel/timewords.py` | English and Spanish short-term time expressions |
 | `steel/facts.py` | `SteelFactStore(LocalFactStore)`: stable id, `forget(id)`, hash-only forgotten list, duplicate guard, routing of time-bound facts to notes |
 | `steel/memory_files.py` | Exact-line ids and removal for `MEMORY.md` / `USER.md` |
 | `steel/memory.py` | `SteelMemory`: list (with expiry), remember, forget (with related), wipe and audit across all stores; `readable(source)`, the read-only view the tools use |
-| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (`read_unexpired` opens the file read-only and deletes nothing, for the tools); hold time-bound facts and `remember --days`; each note has a `source` (`user`, `time_bound`, `room`; nothing writes `room` yet); older databases are migrated to `user` |
+| `steel/notes.py`, `steel/notes_cli.py` | The original expiring SQLite notes (`read_unexpired` opens the file read-only and deletes nothing, for the tools); hold time-bound facts and `remember --days`; each note has a `source` (`user`, `time_bound`, `room`; only `steel look --save` writes `room`); older databases are migrated to `user`, and `read_unexpired` filters by source |
 
 ### Phases 2a and 2b: permission policy and the first tools (command line only)
 
@@ -47,20 +47,20 @@ flowchart LR
     C --> L
     G[steel_policy.json, by hand] --> P
     G --> C
-    C -->|allowed only if granted and logged| X[memory_search_facts / memory_search_notes]
+    C -->|allowed only if granted and logged| X[memory_search_facts / _notes / _room]
     X -->|read only, no purge| R[SteelMemory.readable]
     R --> J2[memory_facts.jsonl]
     R --> N2[steel_notes.sqlite3, opened mode=ro]
 ```
 
-The chat does not enter this flow: the model cannot call a tool. Only `steel tool call` does. `steel policy show`, `steel tool list` and `steel doctor` read the grants file and write nothing.
+The model never enters this flow: it cannot call a tool. `steel tool call` does, and since Phase 4 so do the owner's typed slash commands in `steel chat` (next sections). `steel policy show`, `steel tool list` and `steel doctor` read the grants file and write nothing.
 
 | Module | Role |
 | --- | --- |
 | `steel/security/policy.py` | `SteelPolicy`: deny by default, fixed capability vocabulary, grants per agent, traversal-safe path matching, one grantable wildcard (`memory:read:*`), sensors never wildcarded. Adapted from OpenJarvis `capabilities.py` (see docs/PROVENANCE.md). No OpenJarvis import |
 | `steel/security/audit.py` | Names-only decision log, mode 600, rotated at 5 MB (3 files kept); `write()` has no parameter for resources or text |
 | `steel/security/executor.py` | `build_executor`: the only place STEEL builds a `ToolExecutor`. Refuses a missing policy, tools without declared capabilities, and file tools without declared path arguments |
-| `steel/tools/memory_search.py`, `steel/tools/__init__.py` | `memory_search_facts` and `memory_search_notes` (one capability each, read only) and `get_memory_tools(home)`, the only function that builds them. Nothing is registered with OpenJarvis |
+| `steel/tools/memory_search.py`, `steel/tools/__init__.py` | `memory_search_facts`, `memory_search_notes` and `memory_search_room` (one capability each, read only; room notes only through `memory:read:room`) and `get_memory_tools(home)`, the only function that builds them. Nothing is registered with OpenJarvis |
 | `docs/POLICY.md` | The design, the exact `ToolExecutor` interface, every rule, every limit, and the test for each rule |
 
 ### Phase 2c: push-to-talk voice (command line only)
@@ -99,11 +99,13 @@ The transcript is treated exactly like typed text from the moment the owner conf
 
 ```mermaid
 flowchart LR
+    K[Enter key, or the typed /look in chat] --> T
     CMD[steel look] --> E[build_executor: policy check, agent eyes]
     E -->|sensor:camera granted by hand, logged| T[CameraLook tool]
-    T -->|consent file present| C[capture_one: print CAMERA OPEN FIRST]
+    T -->|consent file present, then the key| C[capture_one: print CAMERA OPEN FIRST]
     C -->|proof the line is shown| F[FfmpegCameraSource: ffmpeg, ONE raw frame to a pipe, no file]
-    F -->|raw frame in RAM| S[downscale to at most 448 px, PNG in memory, raw frame zeroed]
+    F -->|raw frame in RAM| B{black? retry ONCE, longer warm-up, new CAMERA OPEN line}
+    B --> S[downscale to at most 448 px, PNG in memory, raw frame zeroed]
     S --> D[OllamaDescriber: local Ollama only, no tools, no memory, redaction on the way out]
     D -->|text only, first line says DATA| T
     T --> P[printed to the owner]
@@ -123,14 +125,38 @@ The description is untrusted data from the moment it exists: it starts with a fi
 | `steel/vision/source.py`, `steel/vision/camera.py` | The `FrameSource` interface; the real source runs `ffmpeg` and writes one raw frame to a pipe (needs the proof to open, watchdog, no file) |
 | `steel/vision/frame.py` | `Frame`, area-average downscale with NumPy, a PNG encoder from the standard library, wiping. No imaging library |
 | `steel/vision/describe.py` | The fixed system prompt, the "data" line, `OllamaDescriber` (loopback hosts only, `OllamaEngine` + OpenJarvis redaction scanners), text cleaning |
-| `steel/vision/config.py`, `steel/vision/commands.py` | `STEEL_CAMERA_DEVICE` / `STEEL_VISION_MODEL`; `steel vision check/consent/revoke` and `steel look [--save]` |
+| `steel/vision/config.py`, `steel/vision/commands.py` | `STEEL_CAMERA_DEVICE` / `STEEL_VISION_MODEL` (default `qwen3.5:2b`) / `STEEL_CAMERA_WARMUP_FRAMES` (default 20); `steel vision check/consent/revoke` and `steel look [--save]` |
+| `steel/vision/startkey.py` | `PictureKey`: the Enter key that takes the picture (the voice `Terminal` with the camera's words); `arm()` when the typed `/look` is the key press |
 | `steel/tools/camera.py` | `camera_look`: one capability (`sensor:camera`), one optional `question`, text only, frame wiped in a `finally`; `get_camera_tool` in `steel/tools/__init__.py` builds it |
 | `scripts/vision_check.py` | The owner's live check; scratch directory, deleted afterwards |
 | `docs/VISION.md` | The design (written first), the measurements, the consent text and the test for each claim |
 
+### Phase 4: slash commands in `steel chat` (typed by the owner; the model has no tools)
+
+```mermaid
+flowchart LR
+    I[line the owner types] -->|starts with /| H[SlashCommands.handle]
+    I -->|anything else| A[ChatSession.ask]
+    A --> M[model reply: printed, never parsed]
+    H -->|cap 20 per chat, 5 s between looks| E[build_executor: policy check, agent chat]
+    E -->|granted by hand, logged| T[memory_search_* / camera_look]
+    T --> P[tooldata.prepare: strip escapes, redact, cap 2000, injection scan]
+    P --> S[shown to the owner]
+    S --> Q{flagged? not offered. Else Enter = add, Esc = no}
+    Q -->|Enter| D[ChatSession.add_tool_data: wrapped data message, RAM history only]
+    D -.never.-> X[fact extractor / memory]
+```
+
+| Module | Role |
+| --- | --- |
+| `steel/slash.py` | The commands (`/search`, `/notes`, `/room`, `/look`, `/help`), the limits, the banner (policy preview, not logged), `build_slash` (one executor as agent `chat`) |
+| `steel/tooldata.py` | `prepare` (rule 1 of docs/INJECTION.md), the wrapper, `is_tool_data` for the extractor |
+| `steel/meminfo.py` | `steel doctor`'s memory-pressure warning (reads `/proc/meminfo` only) |
+| `docs/INJECTION.md` | The threat model and rules (written first), why model-initiated tool calls are not implemented, and the test for each rule |
+
 ### Relationship to OpenJarvis
 
-STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`.
+STEEL imports OpenJarvis from the pinned install and never edits or copies its source. It uses the shared `core` objects (config, `EventBus`, `Message`/`Role`, registries), so anything STEEL registers later lands in the same registries OpenJarvis uses. It reuses `MemoryService`, `FactExtractor`, `InjectionScanner`, `inject_context`, `setup_security` and `get_engine` as they are (the chat path). The camera path imports only `OllamaEngine`, `Message`, `GuardrailsEngine` with the secret and PII scanners, and `InjectionScanner`; it does not call `get_engine`. The slash commands reuse `SecretScanner`, `PIIScanner` and `InjectionScanner` on tool results, and the stock `ToolExecutor` through `build_executor`.
 
 STEEL constructs `MemoryService` itself instead of calling `build_memory_service`, because that helper would create a plain `LocalFactStore` (no forget-by-id, duplicate guard or routing) and OpenJarvis' `FactExtractor`. `SteelFactExtractor` subclasses it and uses only its public `extract` and `system_prompt`. `SteelFactStore.forget` holds the same thread lock and cross-process file lock as upstream `add`/`clear`, and uses LocalFactStore private members. That is why the pin is enforced at runtime.
 

@@ -289,7 +289,7 @@ A grant is necessary, not sufficient: the tool also refuses without the consent 
 
 ### 7.2 The camera tool and its grant (Phase 3)
 
-`steel/tools/camera.py` defines `camera_look`. It declares exactly one capability, `sensor:camera`, takes one optional argument (`question`, 1 to 200 characters without control characters) and returns **text**: a fixed first line saying the description is data, not instructions, then the vision model's description. It never returns the picture. It is built only by `get_camera_tool(home)` and run only through `build_executor`, as the agent `eyes`, by `steel look`. Nothing is registered with the OpenJarvis `ToolRegistry`. With no grant nothing is captured and the denial is logged (agent, capability, `deny`, reason; never the question or the description).
+`steel/tools/camera.py` defines `camera_look`. It declares exactly one capability, `sensor:camera`, takes one optional argument (`question`, 1 to 200 characters without control characters) and returns **text**: a fixed first line saying the description is data, not instructions, then the vision model's description. It never returns the picture. It is built only by `get_camera_tool(home)` and run only through `build_executor`, as the agent `eyes` by `steel look`, and since Phase 4 as the agent `chat` by the typed `/look` (section 7.3). Nothing is registered with the OpenJarvis `ToolRegistry`. With no grant nothing is captured and the denial is logged (agent, capability, `deny`, reason; never the question or the description).
 
 A sensor grant must name this exact tool. Example, written **by hand** as `~/.openjarvis/steel_policy.json` (mode 600; STEEL never writes it), also printed by `steel vision check` while the grant is missing:
 
@@ -306,7 +306,29 @@ A sensor grant must name this exact tool. Example, written **by hand** as `~/.op
 }
 ```
 
-A grant is necessary, not sufficient: the tool also refuses without the camera consent file (`steel vision consent`, a different file from the microphone's) and without a terminal for the `● CAMERA OPEN` line. The policy cannot limit what the camera sees, who is in view, or what the model says; those limits are in the tool and in docs/VISION.md. The `question` argument is typed by the owner today; if a model is ever allowed to call this tool it becomes model-controlled, and the design must be reviewed first (docs/VISION.md 5.4). A grant of `sensor:camera` to the microphone's agent, or of `sensor:microphone` to `eyes`, opens nothing. The tests that prove each rule are listed in docs/VISION.md section 9 (they are not repeated in section 8).
+A grant is necessary, not sufficient: the tool also refuses without the camera consent file (`steel vision consent`, a different file from the microphone's) and without a terminal for the `● CAMERA OPEN` line and the owner's Enter key. The policy cannot limit what the camera sees, who is in view, or what the model says; those limits are in the tool and in docs/VISION.md. The `question` argument is typed by the owner today; if a model is ever allowed to call this tool it becomes model-controlled, and the design must be reviewed first (docs/VISION.md 5.4). A grant of `sensor:camera` to the microphone's agent, or of `sensor:microphone` to `eyes`, opens nothing. The tests that prove each rule are listed in docs/VISION.md section 9 (they are not repeated in section 8).
+
+### 7.3 Slash commands in `steel chat`: the agent `chat` (Phase 4)
+
+The owner's typed slash commands run as the agent `chat`, one `ToolExecutor` built by `build_executor` with `memory_search_facts`, `memory_search_notes`, `memory_search_room` and `camera_look` (no microphone tool: push-to-talk is `steel chat --voice`, agent `voice`). Each command is one call and one logged decision; a denial is printed with a pointer to this section. Grants of the agents `eyes`, `voice` or `cli` do not apply to `chat`. Example, written **by hand** (mode 600; STEEL never writes it); grant only what you want to use:
+
+```json
+{
+  "agents": [
+    {
+      "agent_id": "chat",
+      "grants": [
+        {"capability": "memory:read:facts", "pattern": "memory_search_facts"},
+        {"capability": "memory:read:notes", "pattern": "memory_search_notes"},
+        {"capability": "memory:read:room",  "pattern": "memory_search_room"},
+        {"capability": "sensor:camera",     "pattern": "camera_look"}
+      ]
+    }
+  ]
+}
+```
+
+Several agents go in the same `agents` list (for example `chat` and `eyes` together). The camera grant must name `camera_look` exactly, as everywhere; `/look` also needs the camera consent file. `steel chat` prints one line at the start saying which commands these grants allow (asked with `preview`, so it writes no log line). The `question` of `/look` is typed by the owner. What the policy cannot do here (it does not decide what a result says, or whether the model is misled by data the owner added) is in docs/INJECTION.md, with the test for each rule (they are not repeated in section 8).
 
 ## 8. Evidence
 
