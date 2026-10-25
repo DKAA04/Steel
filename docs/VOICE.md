@@ -2,7 +2,7 @@
 
 **Status: implemented (Phase 2c), except where marked.** Spoken replies moved to their own design in Phase 5a: docs/SPEAK.md. This document was written and committed *before* any audio code (see the git history), and the code was then built against it. Section 9 says, per claim, which test proves it, and what no test can prove. A claim without a named test there is not claimed. **Not implemented: the wake word (section 7), and everything that needs the real microphone, which the test suite never opens.** Speech output is Phase 5a (docs/SPEAK.md); the earlier `espeak-ng` call is gone.
 
-Scope: push-to-talk speech input, and optional spoken replies. **No wake word and no always-on listening.** Nothing leaves the computer.
+Scope: push-to-talk speech input, and optional spoken replies. **No wake word and no always-on listening in this design**; the one exception the owner allowed is designed separately in docs/JARVIS.md (section 7 below). Nothing leaves the computer.
 
 ## 1. What this machine has (evidence)
 
@@ -177,7 +177,10 @@ Order of the checks in `steel voice listen` and `steel chat --voice`: the comman
 
 **Anyone who speaks near the microphone while it is open is recorded** (in RAM, and transcribed). The microphone does not know whose voice it hears, and STEEL does no speaker identification. What limits this is the push-to-talk design: the microphone is open only for short, deliberate, visible recordings, never in the background. It is not a privacy guarantee for third parties; the owner must not record people who do not know. Whatever a bystander said can end up in the transcript, and, if the owner confirms it, in the model prompt and in the fact store.
 
-## 7. Wake word: NOT IMPLEMENTED
+## 7. Wake word: NOT IMPLEMENTED (designed in docs/JARVIS.md)
+
+**Update 2026-10-25.** The owner lifted the rule "no wake word and no always-on listening" **only for the design in [docs/JARVIS.md](JARVIS.md)** (the foreground `steel jarvis` loop), and only if that design meets every requirement below; where the two differ, the stricter wins. It stays forbidden everywhere else: no background service or daemon, no start at login, no listening without the loop running in a foreground terminal, no cloud speech service. **Until its code and tests exist, the wake word remains NOT IMPLEMENTED.** docs/JARVIS.md section 3 answers each requirement below, one subsection each. The text below is the original section, unchanged.
+
 
 A wake word ("hey STEEL") would mean **a microphone that is always open**, listening for a trigger. That is outside this phase and outside this design. If it is ever built it needs its own design and review first. The risks it brings:
 

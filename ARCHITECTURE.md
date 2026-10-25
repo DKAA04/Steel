@@ -228,7 +228,7 @@ A fact's id is `f-` plus the first 12 hex characters of SHA-256 of its lowercase
 
 - No agent loop and nothing registered with OpenJarvis (`[tools] enabled = []`). `build_executor` is called by `steel tool call` and by tests only. The chat model cannot call a tool. The `memory_manage` tool is deliberately not used.
 - No sandbox: the policy guards `ToolExecutor` calls only.
-- No network server, no wake word, no always-on listening, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above). Spoken replies have no echo cancellation; none is needed while the microphone is push-to-talk (docs/SPEAK.md section 7).
+- No network server, no video, no motion detection and no recognising people. Voice input is push-to-talk and vision is one picture per command (above). A wake word and always-on listening are **NOT IMPLEMENTED**: they are designed in docs/JARVIS.md (the foreground `steel jarvis` loop), the only always-on listening the owner allowed (2026-10-25); no background service, daemon or start at login. Spoken replies have no echo cancellation; none is needed while the microphone is push-to-talk (docs/SPEAK.md section 7).
 - Conversation history is not persisted.
 
 ## Planned extension points
