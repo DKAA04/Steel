@@ -240,7 +240,7 @@ Nothing spoken is run: the transcript is plain text for the same chat session as
 | `steel/jarvis/wakeword.py` | `OpenWakeWord`: the ported openWakeWord streaming features (Apache-2.0, docs/PROVENANCE.md), three ONNX sessions loaded after `telemetry_off()`, fixed buffers (110 ms raw, 76 mel frames, 16 embeddings), `reset`/`wipe` |
 | `steel/jarvis/models.py` | The three pinned model files (size, SHA-256, release v0.5.1), `models_ready` |
 | `steel/jarvis/source.py` | `WakeSource` (listening) and `RequestSource` (the request): `arecord` on a pipe through `setpriv --pdeathsig KILL`; the listening one opens only with the `ListeningShown` proof |
-| `steel/jarvis/indicators.py`, `steel/jarvis/guard.py` | The terminal status line and the guard client; the guard process (Tk window, `/proc` check of `arecord` children, watchdog, cleanup when its input ends) |
+| `steel/jarvis/indicators.py`, `steel/jarvis/guard.py` | The terminal status line and the guard client (`alive()`, `beat()`: a dead guard or a failed heartbeat closes the microphone at once); the guard process (Tk window, `/proc` check of `arecord` children, watchdog, cleanup when its input ends, and when its window is lost or Tk raises it kills the microphones and exits 1) |
 | `steel/jarvis/procs.py` | `/proc` helpers, the pidfile (pids with start times), `steel jarvis stop` |
 | `steel/jarvis/loop.py` | `JarvisLoop`: listen, record, countdown, ask, speak, echo pause; mute, quit, Ctrl-C, endings |
 | `steel/jarvis/echo.py` | `EchoGate`: the microphone stays closed until the player has exited plus 0.5 s |
