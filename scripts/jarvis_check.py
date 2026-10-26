@@ -24,10 +24,13 @@ What it does:
      time per second of audio for the wake-word engine, resident memory, and the
      engine's start-up time.
 
-It writes no file of its own and keeps no audio: frames go only to the engine's
-fixed-size buffers and are zeroed. The only files touched are the ones the loop
-also touches: the pidfile (removed at the end) and the policy's names-only
-audit lines. telemetry_off() runs before the engine loads onnxruntime.
+It keeps no audio: frames go only to the engine's fixed-size buffers and are
+zeroed. It writes no results, transcripts or logs. Two files are touched, as by
+the loop: while it runs, a private pidfile (~/.openjarvis/steel_jarvis.pid,
+mode 600: the process ids and start times of this check and its guard, nothing
+else) so that "steel jarvis stop" works from another terminal; it is removed
+on every exit (normal end, an error, Ctrl-C). And the policy's names-only audit
+lines. telemetry_off() runs before the engine loads onnxruntime.
 
 Keys while listening: m = mute (microphone closed), q = quit, Ctrl-C = quit.
 The period you choose is capped by the session limit (STEEL_JARVIS_MAX_MINUTES,
@@ -259,26 +262,29 @@ def _listen(home: Path, config: Any, ask: Callable[[str], str]) -> int:
         return engine
 
     guard = GuardClient()
-    guard.start()
-    write_pidfile(home, os.getpid(), guard.pid)
-    keys = KeyPoll()
-    limits = Limits(config)
-    tool = get_wake_tool(
-        home,
-        config=config,
-        limits=limits,
-        indicators=Indicators(guard),
-        keys=keys,
-        in_foreground=owns_terminal,
-        make_engine=make_engine,
-        device=voice_config().device,
-    )
-    policy, _problem = policy_or_deny_all(home)
-    executor = build_executor([tool], policy=policy, agent_id=AGENT)
+    tool: Any = None
     wakes = false_triggers = 0
     listened = 0.0
     ended = "?"
+    # Everything from the guard's start on is inside try: the pidfile and the
+    # guard are cleaned up on every exit (normal end, error, Ctrl-C).
     try:
+        guard.start()
+        write_pidfile(home, os.getpid(), guard.pid)
+        keys = KeyPoll()
+        limits = Limits(config)
+        tool = get_wake_tool(
+            home,
+            config=config,
+            limits=limits,
+            indicators=Indicators(guard),
+            keys=keys,
+            in_foreground=owns_terminal,
+            make_engine=make_engine,
+            device=voice_config().device,
+        )
+        policy, _problem = policy_or_deny_all(home)
+        executor = build_executor([tool], policy=policy, agent_id=AGENT)
         while True:
             started = time.monotonic()
             with keys:
@@ -309,11 +315,13 @@ def _listen(home: Path, config: Any, ask: Callable[[str], str]) -> int:
                 ended = str(outcome or result.content)
             break
     except KeyboardInterrupt:
-        tool.cancel()
-        tool.wait_idle(3.0)
+        if tool is not None:
+            tool.cancel()
+            tool.wait_idle(3.0)
         ended = "Ctrl-C"
     finally:
-        tool.wipe()
+        if tool is not None:
+            tool.wipe()
         guard.close()  # its input ends: it kills any microphone it has seen
         remove_pidfile(home)
     report(

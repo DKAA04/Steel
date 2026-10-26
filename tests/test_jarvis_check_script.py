@@ -118,40 +118,55 @@ class JarvisCheckScriptTest(base.HomeTestCase):
         self.assertEqual(engine.frames, 2)
         self.assertGreaterEqual(engine.cpu, 0.0)
 
-    def test_a_whole_fake_run_counts_a_false_trigger_and_cleans_up(self) -> None:
+    def fake_run(
+        self, *extra: Any, ask: str = "n"
+    ) -> tuple[int, str, FakeGuard, list[FakeWakeSource], list[int]]:
+        """main() through the listening part with fakes for every device.
+
+        Returns the status, the output, the guard, the sources and, for each
+        source opened, the pidfile's mode at that moment (-1 if absent)."""
         guard = FakeGuard()
         scripts = [[QUIET, WAKE], [QUIET]]  # a wake, then the microphone ends
         sources: list[FakeWakeSource] = []
+        pid_modes: list[int] = []
 
         def wake_source(device: str, seconds: float) -> FakeWakeSource:
+            path = pidfile_path(self.home)
+            pid_modes.append(path.stat().st_mode & 0o777 if path.exists() else -1)
             source = FakeWakeSource(scripts.pop(0) if scripts else [])
             sources.append(source)
             return source
 
-        home_before = {p.name for p in self.home.rglob("*")}
         out = io.StringIO()
-        with (
-            contextlib.redirect_stdout(out),
-            mock.patch("steel.jarvis.indicators.GuardClient", return_value=guard),
-            mock.patch("steel.jarvis.keys.KeyPoll", return_value=FakeKeys()),
-            mock.patch("steel.jarvis.keys.owns_terminal", return_value=True),
-            mock.patch("steel.jarvis.source.WakeSource", side_effect=wake_source),
-            mock.patch.object(
-                self.script,
-                "load_engine",
-                return_value=self.script.MeasuredEngine(FakeEngine(), 0.2),
-            ),
-            mock.patch.object(sys, "stderr", FakeTTY()),
-            mock.patch("subprocess.Popen", side_effect=AssertionError("started")),
-        ):
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(out))
+            for patch in (
+                mock.patch("steel.jarvis.indicators.GuardClient", return_value=guard),
+                mock.patch("steel.jarvis.keys.KeyPoll", return_value=FakeKeys()),
+                mock.patch("steel.jarvis.keys.owns_terminal", return_value=True),
+                mock.patch("steel.jarvis.source.WakeSource", side_effect=wake_source),
+                mock.patch.object(
+                    self.script,
+                    "load_engine",
+                    return_value=self.script.MeasuredEngine(FakeEngine(), 0.2),
+                ),
+                mock.patch.object(sys, "stderr", FakeTTY()),
+                mock.patch("subprocess.Popen", side_effect=AssertionError("started")),
+                *extra,
+            ):
+                stack.enter_context(patch)
             status = self.script.main(
                 ["--minutes", "1"],
                 home=self.home,
                 foreground=lambda: True,
                 which=lambda name: f"/usr/bin/{name}",
-                ask=lambda _prompt: "n",  # "did you say it?" no: a false trigger
+                ask=lambda _prompt: ask,  # "did you say it?" no: a false trigger
             )
-        text = out.getvalue()
+        return status, out.getvalue(), guard, sources, pid_modes
+
+    def test_a_whole_fake_run_counts_a_false_trigger_and_cleans_up(self) -> None:
+        home_before = {p.name for p in self.home.rglob("*")}
+        status, text, guard, sources, _ = self.fake_run()
         self.assertEqual(status, 0)
         self.assertIn("false triggers: 1", text)
         self.assertIn("wake words you confirmed: 0", text)
@@ -160,9 +175,61 @@ class JarvisCheckScriptTest(base.HomeTestCase):
         self.assertTrue(all(s.closed == 1 for s in sources))  # closed every time
         self.assertTrue(guard.started and guard.closed)
         self.assertIn("SHOW LISTENING for 'hey jarvis'", guard.sent)
-        self.assertFalse(pidfile_path(self.home).exists())
         new_files = {p.name for p in self.home.rglob("*")} - home_before
         self.assertLessEqual(new_files, {"steel_policy_audit.jsonl"})  # names only
+
+    def test_the_pidfile_is_private_while_it_runs_and_removed_at_the_end(
+        self,
+    ) -> None:
+        status, _, _, _, pid_modes = self.fake_run()
+        self.assertEqual(status, 0)
+        self.assertEqual(pid_modes, [0o600, 0o600])  # there, mode 600, each time
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_the_pidfile_is_removed_when_starting_up_fails(self) -> None:
+        broken = mock.patch(
+            "steel.tools.get_wake_tool", side_effect=RuntimeError("broken")
+        )
+        with self.assertRaises(RuntimeError):
+            self.fake_run(broken)
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_the_pidfile_is_removed_when_an_error_happens_while_listening(
+        self,
+    ) -> None:
+        # After a wake word the question to the owner fails (the terminal went
+        # away): the error propagates, the pidfile and the guard are cleaned up.
+        broken = mock.patch.object(
+            self.script, "_ask", side_effect=RuntimeError("terminal gone")
+        )
+        with self.assertRaises(RuntimeError):
+            self.fake_run(broken)
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_a_tool_error_ends_the_check_cleanly(self) -> None:
+        # The executor turns an exception inside the tool into an error result.
+        broken = mock.patch(
+            "steel.jarvis.listen.WakeListen.execute",
+            side_effect=RuntimeError("engine gone"),
+        )
+        status, text, guard, _, _ = self.fake_run(broken)
+        self.assertEqual(status, 0)
+        self.assertIn("ended:", text)
+        self.assertTrue(guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_the_pidfile_is_removed_after_ctrl_c_and_the_report_is_printed(
+        self,
+    ) -> None:
+        ctrl_c = mock.patch(
+            "steel.security.executor.build_executor",
+            return_value=mock.Mock(execute=mock.Mock(side_effect=KeyboardInterrupt)),
+        )
+        status, text, guard, _, _ = self.fake_run(ctrl_c)
+        self.assertEqual(status, 0)
+        self.assertIn("ended: Ctrl-C", text)
+        self.assertTrue(guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
 
     def test_it_turns_telemetry_off_and_uses_no_forbidden_audio_library(self) -> None:
         source = SCRIPT.read_text(encoding="utf-8")
