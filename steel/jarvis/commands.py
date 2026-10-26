@@ -340,7 +340,7 @@ def run_jarvis(
             open_source=parts.request_source
             or (lambda: RequestSource(voice.device, voice.max_seconds)),
             transcriber=parts.transcriber,
-            push_to_talk=WakeTrigger(terminal),
+            push_to_talk=WakeTrigger(terminal, indicators.window_ok),
             **({"indicator": Indicator(parts.screen)} if parts.screen else {}),
         )
         policy, _problem = _policy(home)

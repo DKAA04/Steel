@@ -266,6 +266,7 @@ def _listen(home: Path, config: Any, ask: Callable[[str], str]) -> int:
     wakes = false_triggers = 0
     listened = 0.0
     ended = "?"
+    status = 0
     # Everything from the guard's start on is inside try: the pidfile and the
     # guard are cleaned up on every exit (normal end, error, Ctrl-C).
     try:
@@ -311,6 +312,11 @@ def _listen(home: Path, config: Any, ask: Callable[[str], str]) -> int:
                 break
             if isinstance(outcome, str) and outcome.startswith("limit:"):
                 ended = MESSAGES.get(outcome[6:], outcome)
+            elif not result.success:
+                # A refusal or a failure (for example the indicator window went
+                # away): say it in words and end with a non-zero status.
+                ended = result.content
+                status = 1
             else:
                 ended = str(outcome or result.content)
             break
@@ -332,7 +338,7 @@ def _listen(home: Path, config: Any, ask: Callable[[str], str]) -> int:
         engine=measured[0] if measured else None,
         ended=ended,
     )
-    return 0
+    return status
 
 
 if __name__ == "__main__":

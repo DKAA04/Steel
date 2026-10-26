@@ -86,15 +86,19 @@ class Countdown:
 
 class WakeTrigger:
     """The request recording's start key is the wake word itself; Enter (or
-    silence, or the length limit) still ends it."""
+    silence, or the length limit) still ends it. So does the loss of the
+    indicator window: the recording must not go on with nothing to see."""
 
-    def __init__(self, terminal: Any) -> None:
+    def __init__(self, terminal: Any, window_ok: Callable[[], bool] | None = None):
         self._terminal = terminal
+        self._window_ok = window_ok
 
     def wait_for_start(self, timeout: float) -> bool:
         return True
 
     def stop_pressed(self) -> bool:
+        if self._window_ok is not None and not self._window_ok():
+            return True
         return bool(self._terminal.stop_pressed())
 
 

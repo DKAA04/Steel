@@ -213,7 +213,7 @@ class JarvisCheckScriptTest(base.HomeTestCase):
             side_effect=RuntimeError("engine gone"),
         )
         status, text, guard, _, _ = self.fake_run(broken)
-        self.assertEqual(status, 0)
+        self.assertEqual(status, 1)  # a failure is not a success
         self.assertIn("ended:", text)
         self.assertTrue(guard.closed)
         self.assertFalse(pidfile_path(self.home).exists())
@@ -228,6 +228,63 @@ class JarvisCheckScriptTest(base.HomeTestCase):
         status, text, guard, _, _ = self.fake_run(ctrl_c)
         self.assertEqual(status, 0)
         self.assertIn("ended: Ctrl-C", text)
+        self.assertTrue(guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_a_guard_that_dies_while_listening_closes_the_microphone_and_exits_1(
+        self,
+    ) -> None:
+        guard = FakeGuard()
+        reads: list[int] = []
+
+        class Dying(FakeWakeSource):
+            def read_frame(self) -> bytes:
+                frame = super().read_frame()
+                reads.append(self.read)
+                if self.read == 3:
+                    guard.dead = True  # the guard process is gone
+                return frame
+
+        sources: list[FakeWakeSource] = []
+
+        def wake_source(device: str, seconds: float) -> FakeWakeSource:
+            source = Dying([QUIET] * 50)
+            sources.append(source)
+            return source
+
+        out = io.StringIO()
+        with contextlib.ExitStack() as stack:
+            stack.enter_context(contextlib.redirect_stdout(out))
+            for patch in (
+                mock.patch("steel.jarvis.indicators.GuardClient", return_value=guard),
+                mock.patch("steel.jarvis.keys.KeyPoll", return_value=FakeKeys()),
+                mock.patch("steel.jarvis.keys.owns_terminal", return_value=True),
+                mock.patch("steel.jarvis.source.WakeSource", side_effect=wake_source),
+                mock.patch.object(
+                    self.script,
+                    "load_engine",
+                    return_value=self.script.MeasuredEngine(FakeEngine(), 0.2),
+                ),
+                mock.patch.object(sys, "stderr", FakeTTY()),
+                mock.patch("subprocess.Popen", side_effect=AssertionError("started")),
+            ):
+                stack.enter_context(patch)
+            status = self.script.main(
+                ["--minutes", "1"],
+                home=self.home,
+                foreground=lambda: True,
+                which=lambda name: f"/usr/bin/{name}",
+                ask=lambda _prompt: "n",
+            )
+        text = out.getvalue()
+        self.assertEqual(status, 1)
+        self.assertIn(
+            "ended: the indicator window went away; the microphone is closed", text
+        )
+        (source,) = sources  # not opened again
+        self.assertEqual(source.closed, 1)
+        self.assertEqual(reads, [1, 2, 3])  # no read after the guard died
+        self.assertEqual(guard.starts, 1)  # never restarted
         self.assertTrue(guard.closed)
         self.assertFalse(pidfile_path(self.home).exists())
 

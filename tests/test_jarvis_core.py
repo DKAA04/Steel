@@ -14,6 +14,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -39,6 +40,7 @@ from steel.jarvis.consent import (
 )
 from steel.jarvis.echo import ECHO_PAUSE, EchoGate, PlayerStillRunning, TrackedSink
 from steel.jarvis.guard import Guard
+from steel.jarvis.guard import main as guard_main
 from steel.jarvis.indicators import (
     IndicatorError,
     Indicators,
@@ -706,6 +708,7 @@ class FakeWindow:
     def __init__(self, *, works: bool = True) -> None:
         self.works = works
         self.visible = False
+        self.raises: Exception | None = None  # Tk raising (TclError)
         self.texts: list[str] = []
 
     def show(self, text: str) -> bool:
@@ -718,6 +721,11 @@ class FakeWindow:
 
     def hide(self) -> None:
         self.visible = False
+
+    def is_up(self) -> bool:
+        if self.raises is not None:
+            raise self.raises
+        return self.visible
 
 
 def mic(pid: int) -> procs.ProcInfo:
@@ -810,6 +818,201 @@ class GuardLogicTest(unittest.TestCase):
         guard.tick()
         guard.end()
         self.assertEqual(sorted(killed), [7, 9])
+
+    def test_a_window_that_disappears_kills_the_microphones_and_fails(self) -> None:
+        mics = [mic(7)]
+        window = FakeWindow()
+        guard, killed, _ = self.guard(window, mics)
+        guard.command("SHOW LISTENING")
+        guard.tick()
+        self.assertEqual(killed, [])
+        window.visible = False  # destroyed, or unmapped by the desktop
+        for _ in range(2):
+            guard.tick()
+        self.assertFalse(guard.finished)  # two ticks are not yet "lost"
+        events = guard.tick()
+        self.assertTrue(guard.finished and guard.failed)
+        self.assertIn(7, killed)
+        self.assertIn("window lost", " ".join(events))
+
+    def test_tk_raising_counts_as_a_lost_window(self) -> None:
+        mics = [mic(7)]
+        window = FakeWindow()
+        guard, killed, _ = self.guard(window, mics)
+        guard.command("SHOW LISTENING")
+        window.raises = RuntimeError("TclError: application has been destroyed")
+        for _ in range(3):
+            guard.tick()
+        self.assertTrue(guard.finished and guard.failed)
+        self.assertIn(7, killed)
+
+    def test_a_brief_flicker_does_not_count(self) -> None:
+        window = FakeWindow()
+        guard, killed, _ = self.guard(window, [mic(7)])
+        guard.command("SHOW LISTENING")
+        for _ in range(10):
+            window.visible = False
+            guard.tick()
+            guard.tick()
+            window.visible = True
+            guard.tick()
+        self.assertFalse(guard.failed)
+        self.assertEqual(killed, [])
+
+    def test_no_window_expected_means_no_loss(self) -> None:
+        guard, _, _ = self.guard(FakeWindow(), [])
+        for _ in range(10):
+            guard.tick()
+        self.assertFalse(guard.failed)
+
+    def test_main_stops_with_status_1_and_kills_the_microphone_when_tk_raises(
+        self,
+    ) -> None:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        process = subprocess.Popen([str(stand_in_arecord(Path(tmp.name))), "30"])
+        self.addCleanup(lambda: (process.kill(), process.wait()))
+        time.sleep(0.1)
+
+        class TkBreaks(FakeWindow):
+            def __init__(self) -> None:
+                super().__init__()
+                self.pumps = 0
+
+            def pump(self) -> None:
+                self.pumps += 1
+                if self.pumps > 3:
+                    raise RuntimeError("TclError: application has been destroyed")
+
+        window = TkBreaks()
+        read_end, write_end = os.pipe()
+        self.addCleanup(os.close, read_end)
+        self.addCleanup(os.close, write_end)
+        os.write(write_end, b"SHOW LISTENING for 'hey jarvis'\n")
+        out = io.StringIO()
+        with (
+            mock.patch.object(sys, "stdin", mock.Mock(fileno=lambda: read_end)),
+            mock.patch.object(sys, "stdout", out),
+        ):
+            status = guard_main([str(os.getpid()), "10"], make_window=lambda: window)
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue().strip(), "SHOWN")
+        deadline = time.monotonic() + 5
+        while process.poll() is None and time.monotonic() < deadline:
+            time.sleep(0.05)
+        self.assertIsNotNone(process.poll())  # the microphone was killed
+
+
+# The real guard code in a real process, with a fake always-up window (there is
+# no display): `-c` instead of `-m` so the window can be injected.
+_GUARD_CODE = """
+import sys
+from steel.jarvis import guard
+
+class Window:
+    def show(self, text): return True
+    def set_text(self, text): pass
+    def hide(self): pass
+    def is_up(self): return True
+    def pump(self): pass
+
+raise SystemExit(guard.main(sys.argv[1:], make_window=Window))
+"""
+# A microphone stand-in named arecord (its process name is what the guard and
+# stop look for): 80 ms frames of silence on stdout for at most about 60 s.
+_MIC_SCRIPT = """#!/bin/sh
+i=0
+while [ $i -lt 1500 ]; do head -c 2560 /dev/zero; sleep 0.04; i=$((i+1)); done
+"""
+
+
+@unittest.skipUnless(shutil.which("setpriv"), "util-linux setpriv is not installed")
+class GuardDeathProcessTest(base.HomeTestCase):
+    """The guard is killed with SIGKILL while the microphone runs: the loop's
+    own check closes the microphone within 2 s (docs/JARVIS.md 3b)."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        give_consents(self.home)
+        ready = mock.patch("steel.jarvis.listen.models_ready", return_value=True)
+        ready.start()
+        self.addCleanup(ready.stop)
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.script = Path(tmp.name) / "arecord"
+        self.script.write_text(_MIC_SCRIPT)
+        self.script.chmod(0o700)
+
+    def real_guard_client(self) -> Any:
+        from steel.jarvis.indicators import GuardClient
+
+        def popen(command: list[str], **kwargs: Any) -> Any:
+            # Same arguments (loop pid, watchdog), the real guard main().
+            return subprocess.Popen(
+                [sys.executable, "-I", "-c", _GUARD_CODE, *command[-2:]], **kwargs
+            )
+
+        return GuardClient(popen=popen)
+
+    def test_killing_the_real_guard_closes_the_microphone_within_two_seconds(
+        self,
+    ) -> None:
+        from jarvis_helpers import FakeEngine, FakeKeys
+
+        from steel.tools import get_wake_tool
+
+        client = self.real_guard_client()
+        client.start()
+        self.addCleanup(client.close)
+        engine = FakeEngine()
+        limits = Limits(JarvisConfig())
+        tool = get_wake_tool(
+            self.home,
+            config=JarvisConfig(),
+            limits=limits,
+            indicators=Indicators(client, FakeTTY()),
+            keys=FakeKeys(),
+            in_foreground=lambda: True,
+            open_source=lambda seconds: WakeSource(
+                "default", seconds, program=str(self.script)
+            ),
+            make_engine=lambda: engine,
+        )
+        results: list[Any] = []
+        worker = threading.Thread(target=lambda: results.append(tool.execute()))
+        worker.start()
+        self.addCleanup(worker.join, 10)
+        self.addCleanup(tool.cancel)
+
+        def microphones() -> list[procs.ProcInfo]:
+            return procs.mic_children(os.getpid())
+
+        deadline = time.monotonic() + 10
+        while time.monotonic() < deadline and not (
+            microphones() and len(engine.frames) >= 3
+        ):
+            time.sleep(0.05)
+        self.assertTrue(microphones(), "the stand-in microphone never started")
+        self.assertGreaterEqual(len(engine.frames), 3, "no frames were read")
+        mic_pids = [m.pid for m in microphones()]
+
+        self.assertIsNotNone(client.pid)
+        killed_at = time.monotonic()
+        os.kill(int(client.pid or 0), signal.SIGKILL)  # the guard, hard
+        worker.join(timeout=2.0)
+        took = time.monotonic() - killed_at
+        self.assertFalse(worker.is_alive(), "the tool still listens 2 s later")
+        self.assertLess(took, 2.0)
+        self.assertEqual(len(results), 1)
+        self.assertFalse(results[0].success)
+        self.assertEqual(results[0].metadata["outcome"], "no_indicator")
+        self.assertIn("the microphone is closed", results[0].content)
+        deadline = time.monotonic() + 2
+        while time.monotonic() < deadline and any(
+            procs.proc_info(pid) for pid in mic_pids
+        ):
+            time.sleep(0.05)
+        self.assertFalse([pid for pid in mic_pids if procs.proc_info(pid)])
 
 
 class GuardProcessTest(unittest.TestCase):

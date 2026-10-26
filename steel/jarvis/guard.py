@@ -15,13 +15,17 @@ processes (arecord) whose parent is the loop, and
 * while listening (the last state starts with LISTENING), kills them and then
   the loop if no BEAT came for WATCHDOG_SECONDS: a stuck loop must not keep
   the microphone;
-* when its input ends (the loop has gone), kills every one it has seen.
+* when its input ends (the loop has gone), kills every one it has seen;
+* if its own window is lost (destroyed, unmapped by the desktop, or Tk raises)
+  while it should be showing, kills every microphone it has seen and exits with
+  status 1: a microphone with no visible indicator must not go on.
 
 It runs in its own session, so Ctrl-C or Ctrl-Z in the terminal do not reach it.
 """
 
 from __future__ import annotations
 
+import contextlib
 import os
 import select
 import sys
@@ -32,6 +36,7 @@ from typing import Protocol
 from steel.jarvis.procs import ProcInfo, kill_exact, mic_children, proc_info
 
 TICK_SECONDS = 0.1
+LOST_TICKS = 3  # consecutive ticks without the window before it counts as lost
 SHOW_TIMEOUT = 5.0  # the loop's wait for SHOWN
 
 
@@ -42,6 +47,12 @@ class Window(Protocol):
     def set_text(self, text: str) -> None: ...
 
     def hide(self) -> None: ...
+
+    def is_up(self) -> bool:
+        """The window still exists and is on screen."""
+
+    def pump(self) -> None:
+        """Let the toolkit handle its events. May raise if the window is gone."""
 
 
 class Guard:
@@ -67,6 +78,8 @@ class Guard:
         self.last_beat = clock()
         self.seen: dict[int, ProcInfo] = {}
         self.finished = False
+        self.failed = False  # the window was lost: exit status 1
+        self._lost = 0
 
     def command(self, line: str) -> str | None:
         """One line from the loop; the answer to send back, if any."""
@@ -95,6 +108,10 @@ class Guard:
         mics = self.children(self.loop_pid)
         for mic in mics:
             self.seen[mic.pid] = mic
+        if self._window_lost():
+            events.append("window lost: killed the microphones and stopped")
+            self.fail()
+            return events
         if mics and not self.shown:
             for mic in mics:
                 if self.kill(mic):
@@ -118,11 +135,29 @@ class Guard:
             events.append("hidden")
         return events
 
+    def _window_lost(self) -> bool:
+        """The window should be showing but is not (for LOST_TICKS in a row)."""
+        if not self.shown:
+            self._lost = 0
+            return False
+        try:
+            up = self.window.is_up()
+        except Exception:  # noqa: BLE001 - Tk errors (TclError) count as lost
+            up = False
+        self._lost = 0 if up else self._lost + 1
+        return self._lost >= LOST_TICKS
+
+    def fail(self) -> None:
+        """The window outside the terminal is gone: end every microphone."""
+        self.failed = True
+        self.end()
+
     def end(self) -> None:
         """The loop is gone (or stuck): no microphone it started may remain."""
         for mic in self.seen.values():
             self.kill(mic)  # only if that very process still runs
-        self.window.hide()
+        with contextlib.suppress(Exception):  # the window may already be gone
+            self.window.hide()
         self.shown = False
         self.finished = True
 
@@ -176,36 +211,53 @@ class TkWindow:
         self.root.withdraw()
         self.root.update()
 
+    def pump(self) -> None:
+        self.root.update()
 
-def main(argv: list[str] | None = None) -> int:
+    def is_up(self) -> bool:
+        return bool(
+            self.root.winfo_exists()
+            and self.root.winfo_ismapped()
+            and self.root.winfo_viewable()
+        )
+
+
+def main(
+    argv: list[str] | None = None, *, make_window: Callable[[], Window] | None = None
+) -> int:
+    """Run the guard. Exit status 1 if its window was lost; 0 otherwise.
+    *make_window* is for tests (a fake window); the real one is Tk."""
     argv = sys.argv[1:] if argv is None else argv
     loop_pid, watchdog = int(argv[0]), float(argv[1])
     window: Window
     try:
-        window = TkWindow()
+        window = (make_window or TkWindow)()
     except Exception:  # noqa: BLE001 - no display, no Tk: the loop gets FAILED
         window = _NoWindow()
     guard = Guard(loop_pid, window, watchdog_seconds=watchdog)
     fd = sys.stdin.fileno()
     pending = b""
-    while not guard.finished:
-        ready, _, _ = select.select([fd], [], [], TICK_SECONDS)
-        if ready:
-            data = os.read(fd, 4096)
-            if not data:  # the loop has gone
-                guard.end()
-                break
-            pending += data
-            while b"\n" in pending:
-                line, pending = pending.split(b"\n", 1)
-                answer = guard.command(line.decode("ascii", "replace"))
-                if answer is not None:
-                    sys.stdout.write(answer + "\n")
-                    sys.stdout.flush()
-        guard.tick()
-        if isinstance(window, TkWindow):
-            window.root.update()
-    return 0
+    try:
+        while not guard.finished:
+            ready, _, _ = select.select([fd], [], [], TICK_SECONDS)
+            if ready:
+                data = os.read(fd, 4096)
+                if not data:  # the loop has gone
+                    guard.end()
+                    break
+                pending += data
+                while b"\n" in pending:
+                    line, pending = pending.split(b"\n", 1)
+                    answer = guard.command(line.decode("ascii", "replace"))
+                    if answer is not None:
+                        sys.stdout.write(answer + "\n")
+                        sys.stdout.flush()
+            guard.tick()
+            if not guard.finished:
+                window.pump()
+    except Exception:  # noqa: BLE001 - Tk raised (TclError): the window is lost
+        guard.fail()
+    return 1 if guard.failed else 0
 
 
 class _NoWindow:
@@ -216,6 +268,12 @@ class _NoWindow:
         pass
 
     def hide(self) -> None:
+        pass
+
+    def is_up(self) -> bool:
+        return False
+
+    def pump(self) -> None:
         pass
 
 

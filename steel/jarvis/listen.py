@@ -33,6 +33,7 @@ from steel.jarvis.wakeword import WakeEngine
 WAKE_TOOL = "wake_listen"
 WAKE_CAPABILITY = "sensor:microphone_always_on"
 BEAT_EVERY = 1.0  # seconds between heartbeats to the guard's watchdog
+WINDOW_GONE = "the indicator window went away; the microphone is closed"
 FOREGROUND_EVERY = 1.0
 
 
@@ -169,6 +170,12 @@ class WakeListen(BaseTool):
             source.open(shown)  # 2. ... then the microphone
             last_beat = last_fg = self._clock()
             while True:
+                if not self._indicators.window_ok():
+                    # The guard owns the window outside the terminal: without
+                    # it nobody can see the microphone is on. Checked before
+                    # every read (80 ms), so there is no read after it dies.
+                    outcome = "no_indicator"
+                    break
                 frame = source.read_frame()
                 if self._cancel.is_set():
                     outcome = "cancelled"
@@ -178,8 +185,11 @@ class WakeListen(BaseTool):
                     break
                 now = self._clock()
                 if now - last_beat >= BEAT_EVERY:
-                    # From this loop itself: if it hangs, the beats stop.
-                    self._indicators.guard.beat()
+                    # From this loop itself: if it hangs, the beats stop. A
+                    # beat that does not arrive means the guard is gone.
+                    if not self._indicators.beat():
+                        outcome = "no_indicator"
+                        break
                     last_beat = now
                 if now - last_fg >= FOREGROUND_EVERY:
                     last_fg = now
@@ -209,6 +219,8 @@ class WakeListen(BaseTool):
             self._live = None
             engine.reset()  # nothing heard before the trigger is kept
             self._indicators.closed()
+        if outcome == "no_indicator":
+            return self._result(outcome, WINDOW_GONE, success=False, score=best)
         return self._result(outcome, outcome, score=best)
 
     def _result(

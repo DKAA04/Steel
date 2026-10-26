@@ -125,20 +125,32 @@ class FakeEngine:
 
 
 class FakeGuard:
-    """The guard client: records what the loop sent; SHOW succeeds unless told."""
+    """The guard client: records what the loop sent; SHOW succeeds unless told.
 
-    def __init__(self, *, shows: bool = True) -> None:
+    ``dead`` is a guard that crashed or was killed: it answers nothing and
+    ``alive()`` is False. ``fail_recording`` refuses only the RECORDING window.
+    ``raises`` makes beat() and alive() raise (an unreadable state)."""
+
+    def __init__(self, *, shows: bool = True, fail_recording: bool = False) -> None:
         self.shows = shows
+        self.fail_recording = fail_recording
+        self.dead = False
+        self.raises: Exception | None = None  # beat() and alive() both raise
+        self.beat_error: Exception | None = None  # only beat() raises
         self.sent: list[str] = []
+        self.starts = 0
         self.started = False
         self.closed = False
         self.pid = None
 
     def start(self) -> None:
         self.started = True
+        self.starts += 1
 
     def show(self, state: str) -> bool:
         self.sent.append(f"SHOW {state}")
+        if self.dead or (self.fail_recording and state.startswith("RECORDING")):
+            return False
         return self.shows
 
     def state(self, state: str) -> None:
@@ -147,11 +159,16 @@ class FakeGuard:
     def hide(self) -> None:
         self.sent.append("HIDE")
 
-    def beat(self) -> None:
+    def beat(self) -> bool:
+        if self.raises is not None or self.beat_error is not None:
+            raise self.raises or self.beat_error  # type: ignore[misc]
         self.sent.append("BEAT")
+        return not self.dead
 
     def alive(self) -> bool:
-        return not self.closed
+        if self.raises is not None:
+            raise self.raises
+        return not self.closed and not self.dead
 
     def close(self) -> None:
         self.closed = True

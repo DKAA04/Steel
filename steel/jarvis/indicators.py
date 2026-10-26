@@ -79,7 +79,11 @@ class GuardClient:
         return None if self._process is None else int(self._process.pid)
 
     def alive(self) -> bool:
-        return self._process is not None and self._process.poll() is None
+        """The guard process has not exited. Any error while asking means no."""
+        try:
+            return self._process is not None and self._process.poll() is None
+        except Exception:  # noqa: BLE001 - fail closed: "not sure" is "gone"
+            return False
 
     def send(self, line: str) -> bool:
         with self._lock:
@@ -108,8 +112,9 @@ class GuardClient:
     def hide(self) -> None:
         self.send("HIDE")
 
-    def beat(self) -> None:
-        self.send("BEAT")
+    def beat(self) -> bool:
+        """The heartbeat for the guard's watchdog. False: it did not arrive."""
+        return self.send("BEAT")
 
     def close(self) -> None:
         """End of the loop: the guard's input ends, it cleans up and exits."""
@@ -167,6 +172,23 @@ class Indicators:
                 "the microphone was not opened"
             )
         return ListeningShown(_TOKEN)
+
+    def window_ok(self) -> bool:
+        """The guard, which owns the window outside the terminal, still runs.
+
+        Any error while asking counts as "gone": the microphone must not stay
+        open on a guess (docs/JARVIS.md 3b)."""
+        try:
+            return bool(self.guard.alive() is True)
+        except Exception:  # noqa: BLE001
+            return False
+
+    def beat(self) -> bool:
+        """Send the heartbeat; False if it did not reach a living guard."""
+        try:
+            return bool(self.guard.beat() is True)
+        except Exception:  # noqa: BLE001
+            return False
 
     def show_recording(self) -> bool:
         """The guard window says RECORDING before the request is recorded."""

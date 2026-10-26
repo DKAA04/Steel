@@ -180,6 +180,21 @@ class LoopCase(base.HomeTestCase):
             )
         return status, out.getvalue()
 
+    def wake_tool(self, **overrides: Any) -> WakeListen:
+        options: dict[str, Any] = {
+            "home": self.home,
+            "config": JarvisConfig(),
+            "limits": Limits(JarvisConfig(), self.clock),
+            "indicators": Indicators(self.guard, self.screen),
+            "open_source": self.wake_source,
+            "make_engine": lambda: self.engine,
+            "keys": self.keys,
+            "in_foreground": lambda: True,
+            "clock": self.clock,
+        }
+        options.update(overrides)
+        return WakeListen(**options)
+
     def listening(self, *scripts: list[bytes]) -> None:
         self.scripts = [list(s) for s in scripts]
 
@@ -207,21 +222,6 @@ class StartTest(LoopCase):
         self.assertFalse(result.success)
         self.assertEqual(result.metadata["outcome"], "no_consent")
         self.assertEqual(self.sources, [])
-
-    def wake_tool(self, **overrides: Any) -> WakeListen:
-        options: dict[str, Any] = {
-            "home": self.home,
-            "config": JarvisConfig(),
-            "limits": Limits(JarvisConfig(), self.clock),
-            "indicators": Indicators(self.guard, self.screen),
-            "open_source": self.wake_source,
-            "make_engine": lambda: self.engine,
-            "keys": self.keys,
-            "in_foreground": lambda: True,
-            "clock": self.clock,
-        }
-        options.update(overrides)
-        return WakeListen(**options)
 
     def test_without_the_grant_the_tool_is_denied_logged_and_never_opens(self) -> None:
         write_grants(
@@ -327,6 +327,146 @@ class IndicatorOrderTest(LoopCase):
         self.assertEqual(self.guard.sent[-1], "HIDE")
         self.assertTrue(self.guard.closed)
         self.assertFalse(pidfile_path(self.home).exists())
+
+
+class GuardDeathTest(LoopCase):
+    """The guard owns the window outside the terminal. If it goes, nobody can
+    see the microphone is on, so the microphone closes (docs/JARVIS.md 3b)."""
+
+    MESSAGE = "the indicator window went away; the microphone is closed"
+
+    def dying_source(self, after: int, frames: int = 80) -> Any:
+        guard = self.guard
+        clock = self.clock
+        sources = self.sources
+
+        class Dying(FakeWakeSource):
+            def read_frame(self) -> bytes:
+                clock.now += 0.08
+                frame = super().read_frame()
+                if self.read == after:
+                    guard.dead = True  # killed, crashed, or its window closed
+                return frame
+
+        def make(seconds: float) -> FakeWakeSource:
+            source = Dying([QUIET] * frames)
+            sources.append(source)
+            return source
+
+        return make
+
+    def test_a_guard_that_dies_while_listening_closes_the_microphone_at_once(
+        self,
+    ) -> None:
+        status, out = self.run_loop(wake_source=self.dying_source(after=3))
+        self.assertEqual(status, 1)
+        self.assertIn(self.MESSAGE, out)
+        (source,) = self.sources  # never reopened
+        self.assertEqual(source.closed, 1)
+        self.assertEqual(source.read, 3)  # no read after the guard died
+        self.assertEqual(self.guard.starts, 1)  # never restarted
+        self.assertTrue(self.guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
+        self.assertEqual(self.guard.sent[-1], "HIDE")
+
+    def test_the_tool_returns_no_indicator_unsuccessfully(self) -> None:
+        tool = self.wake_tool(
+            open_source=self.dying_source(after=2),
+        )
+        result = tool.execute()
+        self.assertFalse(result.success)
+        self.assertEqual(result.metadata["outcome"], "no_indicator")
+        self.assertEqual(result.content, self.MESSAGE)
+        self.assertEqual(self.sources[0].read, 2)
+
+    def test_a_beat_that_raises_counts_as_a_dead_guard(self) -> None:
+        class BeatBroken(FakeGuard):
+            def beat(self) -> bool:  # alive() still says yes
+                raise OSError("broken pipe")
+
+        self.guard = BeatBroken()
+        status, out = self.run_loop(wake_source=self.wake_source_of([QUIET] * 80))
+        self.assertEqual(status, 1)
+        self.assertIn(self.MESSAGE, out)
+        self.assertEqual(self.sources[0].closed, 1)
+        self.assertLess(self.sources[0].read, 20)  # at the first beat, 1 s in
+
+    def test_a_beat_that_does_not_arrive_counts_as_a_dead_guard(self) -> None:
+        class BeatLost(FakeGuard):
+            def beat(self) -> bool:
+                return False  # alive() still says yes
+
+        self.guard = BeatLost()
+        status, out = self.run_loop(wake_source=self.wake_source_of([QUIET] * 80))
+        self.assertEqual(status, 1)
+        self.assertIn(self.MESSAGE, out)
+
+    def test_an_error_while_asking_whether_the_guard_lives_counts_as_dead(
+        self,
+    ) -> None:
+        self.guard.raises = RuntimeError("cannot tell")
+        status, out = self.run_loop(wake_source=self.wake_source_of([QUIET] * 80))
+        self.assertEqual(status, 1)
+        self.assertIn(self.MESSAGE, out)
+        self.assertEqual(self.sources[0].read, 0)  # not one read
+
+    def wake_source_of(self, frames: list[bytes]) -> Any:
+        def make(seconds: float) -> FakeWakeSource:
+            clock = self.clock
+            source = FakeWakeSource(frames, screen=self.screen, guard=self.guard)
+            real = source.read_frame
+
+            def read() -> bytes:
+                clock.now += 0.08
+                return real()
+
+            source.read_frame = read  # type: ignore[method-assign]
+            self.sources.append(source)
+            return source
+
+        return make
+
+    def test_when_the_recording_window_cannot_be_shown_no_request_is_recorded(
+        self,
+    ) -> None:
+        self.guard = FakeGuard(fail_recording=True)
+        self.transcriber.texts = ["never recorded"]
+        self.listening([WAKE], [QUIET])
+        status, out = self.run_loop()
+        self.assertEqual(status, 1)
+        self.assertIn("could not be shown, so nothing is recorded", out)
+        self.assertEqual(self.requests, [])  # the request microphone was not made
+        self.assertEqual(self.transcriber.audio, [])
+        capabilities = {c for _, c, _ in self.decisions()}
+        self.assertEqual(capabilities, {"sensor:microphone_always_on"})
+        self.assertEqual(len(self.sources), 1)  # and listening did not resume
+        self.assertTrue(self.guard.closed)
+        self.assertFalse(pidfile_path(self.home).exists())
+
+    def test_a_guard_that_dies_during_the_request_ends_that_recording(self) -> None:
+        guard = self.guard
+        reads: list[int] = []
+
+        class Dying(FakeRequestSource):
+            def read(self) -> bytes:
+                chunk = super().read()
+                reads.append(self.reads)
+                if self.reads == 2:
+                    guard.dead = True
+                return chunk
+
+        def request() -> FakeRequestSource:
+            source = Dying(chunks=50)
+            self.requests.append(source)
+            return source
+
+        self.transcriber.texts = ["hello"]
+        self.listening([WAKE], [QUIET])
+        status, out = self.run_loop(request_source=request, speak=False)
+        self.assertEqual(status, 1)  # the next listening refuses to start
+        self.assertIn("the microphone was not opened", out)
+        self.assertLessEqual(max(reads), 3)  # stopped at once, not at 30 s
+        self.assertEqual(len(self.sources), 1)  # no second listening
 
 
 class TurnTest(LoopCase):
