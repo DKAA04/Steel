@@ -15,6 +15,7 @@ CITED_FILES = (
     "test_jarvis_check_script.py",
     "test_telemetry_guard.py",
     "test_test_timeout.py",
+    "test_microphone_programs.py",
 )
 
 
