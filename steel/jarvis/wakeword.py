@@ -5,6 +5,15 @@
 # Changed for STEEL (docs/PROVENANCE.md): only the streaming path for one model,
 # 80 ms frames only, much smaller fixed buffers, the buffers can be zeroed, the
 # sessions are injectable for tests, and there is no downloader.
+# Compared as text with upstream v0.6.0 (commit c8ef6912c5feccf1037b852d9bc6c7ed644135ba)
+# on 2026-10-26: frame size and sample rate, the mel input and its x/10 + 2
+# transform, the raw context (1,280 on the first frame after a reset, then
+# 480 + 1,280), the 76-frame window with stride 8, the embedding input shape,
+# 16 embeddings into the classifier, the first 5 scores forced to 0, and the
+# output handling all match. Deviations: the initial feature history comes from
+# seeded noise (default_rng(0)) instead of unseeded noise; the 16 is fixed, not
+# read from the model; no Speex noise suppression and no voice-activity
+# detection (both are off by default upstream). Not compared: anything else.
 """The wake-word engine: openWakeWord's three ONNX models on onnxruntime.
 
 Each 80 ms frame (1280 samples of 16 kHz 16-bit mono) becomes mel frames, the
@@ -96,6 +105,7 @@ class OpenWakeWord:
         self._mel = np.ones((MEL_WINDOW, MEL_BINS), dtype=np.float32)
         self._features = np.zeros((EMBEDDINGS, EMBEDDING_SIZE), dtype=np.float32)
         self._scored = 0
+        self._fresh = True  # no real audio yet: the first frame has no context
         self.reset()
 
     # --- buffers -------------------------------------------------------------
@@ -114,6 +124,7 @@ class OpenWakeWord:
         self._mel[:] = 0
         self._features[:] = 0
         self._scored = 0
+        self._fresh = True
 
     def reset(self) -> None:
         """Zero everything, then refill the feature history as upstream does
@@ -134,6 +145,7 @@ class OpenWakeWord:
         embeddings = self._embed(batch)
         self._features[:] = embeddings[-EMBEDDINGS:]
         self._scored = 0
+        self._fresh = True  # the noise above is not audio that was heard
 
     # --- the pipeline --------------------------------------------------------
 
@@ -156,7 +168,15 @@ class OpenWakeWord:
         # Shift the ring: keep the 30 ms context, then the new frame.
         self._raw[:_CONTEXT_SAMPLES] = self._raw[-_CONTEXT_SAMPLES:]
         self._raw[_CONTEXT_SAMPLES:] = samples
-        mel = self._melspectrogram(self._raw)
+        if self._fresh:
+            # The first frame after a reset has no earlier audio: like
+            # upstream (whose raw buffer is cleared by reset), the mel
+            # spectrogram sees only the 1,280 real samples, not 480 zeros
+            # before them. From the second frame on it is 480 + 1,280.
+            mel = self._melspectrogram(self._raw[_CONTEXT_SAMPLES:])
+            self._fresh = False
+        else:
+            mel = self._melspectrogram(self._raw)
         new = mel.reshape(-1, MEL_BINS)
         self._mel = np.vstack((self._mel, new))[-MEL_WINDOW:]
         embedding = self._embed(self._mel[None, :, :, None])

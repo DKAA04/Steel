@@ -339,8 +339,10 @@ class FakeSessions:
 
         self.np = importlib.import_module("numpy")
         self.wake_inputs: list[Any] = []
+        self.mel_inputs: list[Any] = []  # a copy of every input the mel model got
 
     def mel(self, x: Any) -> list[Any]:
+        self.mel_inputs.append(x.copy())
         frames = max(1, (x.shape[1] - 400) // 160 + 1)
         level = float(abs(x).mean())
         return [self.np.full((frames, 1, 1, 32), level / 100.0, dtype=self.np.float32)]
@@ -385,6 +387,61 @@ class WakeEngineTest(unittest.TestCase):
         self.assertEqual(scores[:5], [0.0] * 5)
         self.assertGreater(scores[7], 0.0)
         self.assertEqual(sessions.wake_inputs[-1], (1, EMBEDDINGS, 96))
+
+    def test_the_first_frame_after_a_reset_has_no_zero_context_like_upstream(
+        self,
+    ) -> None:
+        engine, sessions = self.engine()
+        noise = 16000 * 4  # the seeded noise that refills the feature history
+
+        def lengths() -> list[int]:
+            return [int(x.shape[1]) for x in sessions.mel_inputs]
+
+        self.assertEqual(lengths(), [noise])  # from __init__'s reset
+        first = b"\x01\x10" * (FRAME_BYTES // 2)
+        second = b"\x02\x20" * (FRAME_BYTES // 2)
+        engine.score(first)
+        engine.score(second)
+        engine.score(second)
+        self.assertEqual(lengths(), [noise, 1280, 1760, 1760])
+        engine.reset()
+        engine.score(first)
+        engine.score(second)
+        self.assertEqual(lengths()[4:], [noise, 1280, 1760])  # again after a reset
+        engine.wipe()  # a wipe also forgets the audio that came before
+        engine.score(first)
+        self.assertEqual(lengths()[-1], 1280)
+
+    def test_the_second_frame_gets_its_context_from_the_real_first_frame(
+        self,
+    ) -> None:
+        import numpy as np
+
+        engine, sessions = self.engine()
+        first = np.arange(1280, dtype="<i2") + 100
+        second = np.arange(1280, dtype="<i2") + 5000
+        engine.score(first.tobytes())
+        engine.score(second.tobytes())
+        _, one, two = sessions.mel_inputs[-3:]
+        self.assertTrue((one[0] == first).all())  # no zeros before the real audio
+        self.assertTrue((two[0][:480] == first[-480:]).all())  # 30 ms of context
+        self.assertTrue((two[0][480:] == second).all())
+
+    def test_buffers_stay_at_their_maximum_after_the_shorter_first_input(
+        self,
+    ) -> None:
+        engine, _ = self.engine()
+        for _ in range(3):
+            engine.reset()
+            engine.score(QUIET)  # fewer new mel frames than a steady frame
+            self.assertEqual(
+                engine.buffer_sizes,
+                {
+                    "raw_samples": RAW_RING_SAMPLES,
+                    "mel_frames": MEL_WINDOW,
+                    "embeddings": EMBEDDINGS,
+                },
+            )
 
     def test_only_whole_80_ms_frames_are_accepted(self) -> None:
         engine, _ = self.engine()
